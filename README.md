@@ -4,7 +4,7 @@
 
 Qlib 是面向本地股票量化研究的 Python 工具库，覆盖行情与财务数据管理、表达式因子计算、历史股票池筛选、因子评估和日频回测。通过统一的数据接口，将本地数据转化为可分析、可回测的研究结果。
 
-[功能介绍](docs/overview.md) · [快速上手](docs/quickstart.md) · [API 参考](docs/api/index.rst) · [数据集](https://huggingface.co/datasets/joshuaxql/qlib_data)
+[在线文档](https://qlib-joshuaxql.readthedocs.io/) · [功能介绍](docs/overview.md) · [快速上手](docs/quickstart.md) · [API 参考](docs/api/index.rst) · [数据集](https://huggingface.co/datasets/joshuaxql/qlib_data)
 
 ## 功能
 
@@ -154,6 +154,8 @@ result.save("outputs/backtest")
 信号在下一交易日执行，撮合使用原始价格，并自动读取 `up_limit` / `down_limit` 边界。`TopkDropoutStrategy` 根据实际持仓换出股票，先卖后买，保留股票不重新调权。结果包含净值、持仓、成交、订单和绩效指标。执行假设与配置见[策略与回测](docs/backtest.md)。
 
 ### 6. 浏览文档
+
+在线阅读：**[Qlib 文档](https://qlib-joshuaxql.readthedocs.io/)**。
 
 文档使用 Sphinx 和 `sphinx_rtd_theme`，涵盖使用指南、Python API、表达式与 C 接口：
 

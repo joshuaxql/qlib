@@ -4,7 +4,7 @@
 
 Qlib is a Python library for local stock-market quantitative research. It covers market and financial data management, expression-based factors, historical universe filtering, factor evaluation, and daily backtesting. A unified data interface connects local datasets to analysis and backtest results.
 
-[Overview](docs/overview.md) · [Quick start](docs/quickstart.md) · [API reference](docs/api/index.rst) · [Dataset](https://huggingface.co/datasets/joshuaxql/qlib_data)
+[Documentation](https://qlib-joshuaxql.readthedocs.io/) · [Overview](docs/overview.md) · [Quick start](docs/quickstart.md) · [API reference](docs/api/index.rst) · [Dataset](https://huggingface.co/datasets/joshuaxql/qlib_data)
 
 ## Features
 
@@ -154,6 +154,8 @@ result.save("outputs/backtest")
 Signals execute on the next trading session using raw prices and automatically read `up_limit` / `down_limit` bounds. `TopkDropoutStrategy` selects replacements from actual holdings, sells before buying, and leaves retained positions at their existing quantities. Results include portfolio value, positions, trades, orders, and performance metrics. See [strategies and backtesting](docs/backtest.md) for execution assumptions and configuration.
 
 ### 6. Browse the documentation
+
+Read online: **[Qlib documentation](https://qlib-joshuaxql.readthedocs.io/)**.
 
 The documentation uses Sphinx and `sphinx_rtd_theme`, covering user guides, Python APIs, expressions, and C interfaces. The detailed guides are currently in Chinese.
 
