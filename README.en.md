@@ -1,10 +1,10 @@
 # Qlib
 
-[中文](README.md) | **English**
+[中文](https://github.com/joshuaxql/qlib/blob/main/README.md) | **English**
 
 Qlib is a Python library for local stock-market quantitative research. It covers market and financial data management, expression-based factors, historical universe filtering, factor evaluation, and daily backtesting. A unified data interface connects local datasets to analysis and backtest results.
 
-[Documentation](https://qlib-joshuaxql.readthedocs.io/) · [Overview](docs/overview.md) · [Quick start](docs/quickstart.md) · [API reference](docs/api/index.rst) · [Dataset](https://huggingface.co/datasets/joshuaxql/qlib_data)
+[PyPI](https://pypi.org/project/qlib-joshuaxql/) · [Documentation](https://qlib-joshuaxql.readthedocs.io/) · [Overview](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/overview.html) · [Quick start](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/quickstart.html) · [API reference](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/api/index.html) · [Dataset](https://huggingface.co/datasets/joshuaxql/qlib_data)
 
 ## Features
 
@@ -23,9 +23,28 @@ Qlib is a Python library for local stock-market quantitative research. It covers
 
 ### 1. Install
 
-Requires **Python 3.10+**. Create a virtual environment and install from the project root:
+Requires **Python 3.10+**. Install from PyPI:
+
+```bash
+python -m pip install qlib-joshuaxql
+```
+
+The distribution name is **`qlib-joshuaxql`**, while the Python import remains **`qlib`**:
+
+```python
+import qlib
+
+print(qlib.__version__)
+```
+
+Upgrade with `python -m pip install --upgrade qlib-joshuaxql`. A dedicated virtual environment is recommended.
+The PyPI package supports data reading, factor computation, and backtesting; market and financial datasets are obtained separately.
+
+To run the `scripts/` data maintenance, native compilation, or local documentation commands below, first obtain and install the source:
 
 ```powershell
+git clone https://github.com/joshuaxql/qlib.git
+cd qlib
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[download,docs]"
 ```
@@ -42,7 +61,7 @@ On Windows, optionally build the C kernels using **MinGW-w64 GCC** with the same
 .venv\Scripts\python.exe scripts/build_rolling.py --cc D:/software/mingw64/bin/gcc.exe
 ```
 
-Expression evaluation and PIT queries use pandas/NumPy fallbacks when the DLLs are unavailable. See the [installation guide](docs/installation.md) for environment and build details.
+The PyPI wheel does not include precompiled DLLs. Expression evaluation and PIT queries use pandas/NumPy fallbacks when the DLLs are unavailable. See the [installation guide](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/installation.html) for environment and build details.
 
 ### 2. Prepare data
 
@@ -75,7 +94,7 @@ Downloads are cached as complete CSV files, which are read directly to build Qli
 .venv\Scripts\python.exe scripts/build_limits.py --download
 ```
 
-Reading and backtesting work offline without a Tushare token. See [data management](docs/data.md) for details.
+Reading and backtesting work offline without a Tushare token. See [data management](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/data.html) for details.
 
 ### 3. Read prices and compute factors
 
@@ -106,7 +125,7 @@ print(features.head())
 - `P($$eps)` reads EPS for the latest reporting period announced as of the observation date; `PRef($$eps, -1)` reads the preceding calendar quarter.
 - Call `D.clear_cache()` or initialize again after updating local data.
 
-See [expressions](docs/expressions.md), [historical filters](docs/filters.md), and [PIT financials](docs/pit.md) for operator and timing semantics.
+See [expressions](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/expressions.html), [historical filters](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/filters.html), and [PIT financials](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/pit.html) for operator and timing semantics.
 
 ### 4. Evaluate factors
 
@@ -126,7 +145,7 @@ print(analysis.summary)
 analysis.save("outputs/factor_analysis")
 ```
 
-Default labels enter at the next trading session's open and measure the open-to-open return over the specified holding period. Metric definitions and lower-level evaluation APIs are documented in [factor analysis](docs/factor.md).
+Default labels enter at the next trading session's open and measure the open-to-open return over the specified holding period. Metric definitions and lower-level evaluation APIs are documented in [factor analysis](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/factor.html).
 
 ### 5. Run a backtest
 
@@ -151,7 +170,7 @@ print(result.metrics)
 result.save("outputs/backtest")
 ```
 
-Signals execute on the next trading session using raw prices and automatically read `up_limit` / `down_limit` bounds. `TopkDropoutStrategy` selects replacements from actual holdings, sells before buying, and leaves retained positions at their existing quantities. Results include portfolio value, positions, trades, orders, and performance metrics. See [strategies and backtesting](docs/backtest.md) for execution assumptions and configuration.
+Signals execute on the next trading session using raw prices and automatically read `up_limit` / `down_limit` bounds. `TopkDropoutStrategy` selects replacements from actual holdings, sells before buying, and leaves retained positions at their existing quantities. Results include portfolio value, positions, trades, orders, and performance metrics. See [strategies and backtesting](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/backtest.html) for execution assumptions and configuration.
 
 ### 6. Browse the documentation
 
@@ -163,16 +182,16 @@ The documentation uses Sphinx and `sphinx_rtd_theme`, covering user guides, Pyth
 .venv\Scripts\python.exe -m sphinx -b html -W --keep-going docs docs/_build/html
 ```
 
-Open `docs/_build/html/index.html` after building. Further references: [package structure](docs/structure.md), [API reference](docs/api/index.rst), and [documentation maintenance](docs/documentation.md).
+Open `docs/_build/html/index.html` after building. Further references: [package structure](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/structure.html), [API reference](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/api/index.html), and [documentation maintenance](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/documentation.html).
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE). Copyright and license notices for incorporated code are retained in the corresponding modules:
-[native kernels](qlib/data/_libs/LICENSE), [factor evaluation](qlib/contrib/eva/LICENSE), and [strategies](qlib/contrib/strategy/LICENSE).
+This project is licensed under the [MIT License](https://github.com/joshuaxql/qlib/blob/main/LICENSE). Copyright and license notices for incorporated code are retained in the corresponding modules:
+[native kernels](https://github.com/joshuaxql/qlib/blob/main/qlib/data/_libs/LICENSE), [factor evaluation](https://github.com/joshuaxql/qlib/blob/main/qlib/contrib/eva/LICENSE), and [strategies](https://github.com/joshuaxql/qlib/blob/main/qlib/contrib/strategy/LICENSE).
 
 ## Acknowledgments
 
-- [Microsoft Qlib](https://github.com/microsoft/qlib) for its open-source implementations and quantitative research work. The relationship and scope of references are described in the [overview](docs/overview.md#与官方-qlib-的关系).
+- [Microsoft Qlib](https://github.com/microsoft/qlib) for its open-source implementations and quantitative research work. The relationship and scope of references are described in the [overview](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/overview.html).
 - [Tushare](https://tushare.pro/) for market data, financial indicators, daily price limits, and other data APIs.
 - [NumPy](https://numpy.org/), [pandas](https://pandas.pydata.org/), [SciPy](https://scipy.org/), and [joblib](https://joblib.readthedocs.io/) for numerical computing, data processing, and parallel execution.
 - [MinGW-w64](https://www.mingw-w64.org/), [Sphinx](https://www.sphinx-doc.org/), and [Read the Docs](https://about.readthedocs.com/) for native compilation and documentation tools; [Hugging Face](https://huggingface.co/) for dataset hosting.

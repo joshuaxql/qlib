@@ -7,13 +7,43 @@
 - 下载数据：额外安装 Tushare、tqdm，并配置账户 Token。
 - 原生 DLL：Windows、与 Python 位数匹配的 MinGW-w64 GCC。
 
-本项目的 Python 包名为 `qlib`，建议使用独立虚拟环境安装。
+PyPI 发行包名为 **`qlib-joshuaxql`**，Python 导入名为 **`qlib`**，建议使用独立虚拟环境安装。
+
+## 从 PyPI 安装
+
+```bash
+python -m pip install qlib-joshuaxql
+```
+
+[PyPI 项目页面](https://pypi.org/project/qlib-joshuaxql/) 提供版本信息、wheel 和源码压缩包。
+通用 wheel 可在 Windows、Linux 和 macOS 安装，提供数据读取、因子分析和日频回测。
+数据集需单独下载或构建，见下方“准备数据”。
+
+```python
+import qlib
+
+print(qlib.__version__)
+provider = qlib.init("~/.qlib/qlib_data/cn_data")
+```
+
+升级及可选依赖：
+
+```bash
+python -m pip install --upgrade qlib-joshuaxql
+python -m pip install "qlib-joshuaxql[download,docs]"
+```
+
+`download` 安装 Tushare、tqdm；`docs` 安装文档构建依赖。
+wheel 提供 `qlib` 库与 C 源文件；运行本页及其他指南中的 `scripts/`、`tests/`、`docs/` 命令，
+请使用 Git 仓库或 PyPI 源码压缩包的根目录。
 
 ## 从项目源码安装
 
-在项目根目录执行：
+获取源码并在项目根目录执行：
 
 ```powershell
+git clone https://github.com/joshuaxql/qlib.git
+cd qlib
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 ```
@@ -47,7 +77,7 @@ python3 -m venv .venv
 编译器必须是 MinGW-w64 GCC，不使用 MSVC。脚本会检查目标架构和 Python 位数，输出位于
 `qlib/data/_libs/`。DLL 是本机生成文件；更新前应退出已加载它的 Python 进程。
 
-未构建 DLL 时，表达式层的数值运算使用 pandas/NumPy 回退，PIT 查询也有回退。
+PyPI 通用 wheel 不包含预编译 DLL。未构建 DLL 时，表达式层的数值运算使用 pandas/NumPy 回退，PIT 查询也有回退。
 直接调用 `rolling_*`、`expanding_*` 底层 Python 包装函数则需要对应 DLL。
 文档构建只导入模块，不调用本地数据初始化或 DLL，因此 Read the Docs 的 Linux 环境可直接构建。
 

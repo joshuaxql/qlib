@@ -49,3 +49,21 @@
 API 页面签名和已有 docstring 来自代码。类的构造方法、私有方法和没有 docstring 的函数也会生成条目。
 源码新增函数后，下次构建会自动纳入；覆盖检查确保发现的对象进入 Sphinx 索引，并写入 `api-coverage.json`。
 源码内新增丰富的参数/返回值说明会自动出现在站点中。
+
+## 发布到 PyPI
+
+发行包名为 `qlib-joshuaxql`，导入名为 `qlib`；安装命令见[安装指南](installation.md)。
+发布前同步更新 `pyproject.toml` 与 `qlib/__init__.py` 中的版本号，每个版本只能发布一次。
+
+在项目根目录执行，以下 `0.1.0` 应替换为待发布版本：
+
+```powershell
+python -m pip install build twine
+python -m build
+python -m twine check dist/qlib_joshuaxql-0.1.0-py3-none-any.whl dist/qlib_joshuaxql-0.1.0.tar.gz
+python -m twine upload --repository pypi --config-file "$HOME/.pypirc" dist/qlib_joshuaxql-0.1.0-py3-none-any.whl dist/qlib_joshuaxql-0.1.0.tar.gz
+```
+
+Twine 从用户目录的 `.pypirc` 中读取 `[pypi]` 认证配置。凭据保存在本机，不写入仓库或发布包。
+构建生成通用 Python wheel 和源码压缩包；源码包包含数据维护脚本、测试和文档源文件。
+DLL 由 MinGW-w64 在本机编译，数据集从 Hugging Face 单独获取。

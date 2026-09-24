@@ -4,3 +4,5 @@ docs/_build/
 docs/_generated/
 *.egg-info/
 outputs/
+build/
+dist/

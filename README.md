@@ -1,10 +1,10 @@
 # Qlib
 
-**中文** | [English](README.en.md)
+**中文** | [English](https://github.com/joshuaxql/qlib/blob/main/README.en.md)
 
 Qlib 是面向本地股票量化研究的 Python 工具库，覆盖行情与财务数据管理、表达式因子计算、历史股票池筛选、因子评估和日频回测。通过统一的数据接口，将本地数据转化为可分析、可回测的研究结果。
 
-[在线文档](https://qlib-joshuaxql.readthedocs.io/) · [功能介绍](docs/overview.md) · [快速上手](docs/quickstart.md) · [API 参考](docs/api/index.rst) · [数据集](https://huggingface.co/datasets/joshuaxql/qlib_data)
+[PyPI](https://pypi.org/project/qlib-joshuaxql/) · [在线文档](https://qlib-joshuaxql.readthedocs.io/) · [功能介绍](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/overview.html) · [快速上手](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/quickstart.html) · [API 参考](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/api/index.html) · [数据集](https://huggingface.co/datasets/joshuaxql/qlib_data)
 
 ## 功能
 
@@ -23,9 +23,28 @@ Qlib 是面向本地股票量化研究的 Python 工具库，覆盖行情与财�
 
 ### 1. 安装
 
-需要 **Python 3.10+**。在项目根目录创建虚拟环境并安装：
+需要 **Python 3.10+**。从 PyPI 安装：
+
+```bash
+python -m pip install qlib-joshuaxql
+```
+
+发行包名称为 **`qlib-joshuaxql`**，Python 导入名仍是 **`qlib`**：
+
+```python
+import qlib
+
+print(qlib.__version__)
+```
+
+升级时使用 `python -m pip install --upgrade qlib-joshuaxql`。建议使用独立虚拟环境。
+PyPI 安装即可读取数据、计算因子和运行回测；行情与财务数据需单独准备。
+
+运行下文的 `scripts/` 数据维护、原生编译或本地文档构建命令时，请先获取源码并安装：
 
 ```powershell
+git clone https://github.com/joshuaxql/qlib.git
+cd qlib
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[download,docs]"
 ```
@@ -42,7 +61,7 @@ Windows 下可选编译 C 核心，需要与 Python 位数匹配的 **MinGW-w64 
 .venv\Scripts\python.exe scripts/build_rolling.py --cc D:/software/mingw64/bin/gcc.exe
 ```
 
-未构建 DLL 时，表达式计算和 PIT 查询使用 pandas/NumPy 回退。环境与编译说明见[安装指南](docs/installation.md)。
+PyPI wheel 不包含预编译 DLL。未构建 DLL 时，表达式计算和 PIT 查询使用 pandas/NumPy 回退。环境与编译说明见[安装指南](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/installation.html)。
 
 ### 2. 准备数据
 
@@ -75,7 +94,7 @@ $env:TUSHARE_TOKEN = "你的 Token"
 .venv\Scripts\python.exe scripts/build_limits.py --download
 ```
 
-读取和回测可离线运行，无需 Tushare Token。详细说明见[数据维护](docs/data.md)。
+读取和回测可离线运行，无需 Tushare Token。详细说明见[数据维护](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/data.html)。
 
 ### 3. 读取行情与计算因子
 
@@ -106,7 +125,7 @@ print(features.head())
 - `P($$eps)` 读取当时已公告的最新报告期 EPS；`PRef($$eps, -1)` 读取前一自然季度。
 - 更新本地数据后调用 `D.clear_cache()` 或重新初始化。
 
-算子与时点语义见[表达式](docs/expressions.md)、[历史过滤](docs/filters.md)和[PIT 财务](docs/pit.md)。
+算子与时点语义见[表达式](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/expressions.html)、[历史过滤](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/filters.html)和[PIT 财务](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/pit.html)。
 
 ### 4. 评估因子
 
@@ -126,7 +145,7 @@ print(analysis.summary)
 analysis.save("outputs/factor_analysis")
 ```
 
-默认标签为下一交易日开盘进入、持有指定交易日数后的开盘价收益。指标口径与底层评估接口见[因子分析](docs/factor.md)。
+默认标签为下一交易日开盘进入、持有指定交易日数后的开盘价收益。指标口径与底层评估接口见[因子分析](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/factor.html)。
 
 ### 5. 运行回测
 
@@ -151,7 +170,7 @@ print(result.metrics)
 result.save("outputs/backtest")
 ```
 
-信号在下一交易日执行，撮合使用原始价格，并自动读取 `up_limit` / `down_limit` 边界。`TopkDropoutStrategy` 根据实际持仓换出股票，先卖后买，保留股票不重新调权。结果包含净值、持仓、成交、订单和绩效指标。执行假设与配置见[策略与回测](docs/backtest.md)。
+信号在下一交易日执行，撮合使用原始价格，并自动读取 `up_limit` / `down_limit` 边界。`TopkDropoutStrategy` 根据实际持仓换出股票，先卖后买，保留股票不重新调权。结果包含净值、持仓、成交、订单和绩效指标。执行假设与配置见[策略与回测](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/backtest.html)。
 
 ### 6. 浏览文档
 
@@ -163,16 +182,16 @@ result.save("outputs/backtest")
 .venv\Scripts\python.exe -m sphinx -b html -W --keep-going docs docs/_build/html
 ```
 
-构建后打开 `docs/_build/html/index.html`。更多入口：[包结构](docs/structure.md)、[API 参考](docs/api/index.rst)、[文档维护](docs/documentation.md)。
+构建后打开 `docs/_build/html/index.html`。更多入口：[包结构](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/structure.html)、[API 参考](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/api/index.html)、[文档维护](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/documentation.html)。
 
 ## 开源协议
 
-本项目采用 [MIT License](LICENSE)。引用代码的版权与许可声明保留在相应模块中：
-[数值核心](qlib/data/_libs/LICENSE)、[因子评估](qlib/contrib/eva/LICENSE)、[策略](qlib/contrib/strategy/LICENSE)。
+本项目采用 [MIT License](https://github.com/joshuaxql/qlib/blob/main/LICENSE)。引用代码的版权与许可声明保留在相应模块中：
+[数值核心](https://github.com/joshuaxql/qlib/blob/main/qlib/data/_libs/LICENSE)、[因子评估](https://github.com/joshuaxql/qlib/blob/main/qlib/contrib/eva/LICENSE)、[策略](https://github.com/joshuaxql/qlib/blob/main/qlib/contrib/strategy/LICENSE)。
 
 ## 鸣谢
 
-- [Microsoft Qlib](https://github.com/microsoft/qlib)：感谢其开源实现与量化研究工作；项目关系和参考范围见[功能介绍](docs/overview.md#与官方-qlib-的关系)。
+- [Microsoft Qlib](https://github.com/microsoft/qlib)：感谢其开源实现与量化研究工作；项目关系和参考范围见[功能介绍](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/overview.html)。
 - [Tushare](https://tushare.pro/)：提供行情、财务指标和每日涨跌停价格等数据接口。
 - [NumPy](https://numpy.org/)、[pandas](https://pandas.pydata.org/)、[SciPy](https://scipy.org/) 和 [joblib](https://joblib.readthedocs.io/)：提供数值计算、数据处理与并行计算支持。
 - [MinGW-w64](https://www.mingw-w64.org/)、[Sphinx](https://www.sphinx-doc.org/) 和 [Read the Docs](https://about.readthedocs.com/)：提供原生编译与文档工具；[Hugging Face](https://huggingface.co/) 提供数据集托管。

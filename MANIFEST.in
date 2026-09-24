@@ -1,0 +1,8 @@
+include README.md README.en.md LICENSE .readthedocs.yaml
+recursive-include scripts *.py
+recursive-include docs *.md *.rst *.py *.css Makefile make.bat
+recursive-include tests *.py
+prune docs/_build
+prune docs/_generated
+global-exclude *.pyc *.dll *.so *.pyd
+global-exclude __pycache__
