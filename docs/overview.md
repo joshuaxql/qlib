@@ -9,6 +9,7 @@
 | 过滤器 | ST、上市天数、行业、成分、可交易性、表达式组合 | `qlib.data.filter` |
 | PIT 财务 | 公告时点、报告期、修订版本、合并存储 | `D.financial()`、`P()`、`PRef()` |
 | 因子评估 | IC、RankIC、多空收益、准确率、自相关及批量评估 | `qlib.contrib.eva.alpha` |
+| 因子中性化 | 按日控制历史行业与对数市值，输出联合回归残差 | `neutralize_factors()` |
 | 分析报告 | 多因子、多持有期、覆盖率、分组收益与换手、CSV 导出 | `factor_analysis()` |
 | 回测 | 次日执行、整手、费用、成交限制、退市结算、报告 | `qlib.backtest` |
 | 策略 | 定期 Topk、TopkDropout 换仓、外部目标权重 | `qlib.contrib.strategy` |

@@ -65,13 +65,76 @@ result.save("outputs/factor_analysis")
 | 函数 / 类 | 输入与输出 |
 |---|---|
 | `calculate_factors(instruments, factors, start_time=None, end_time=None, *, provider=None, adjust=None)` | factors 为表达式、列表或名称到表达式的字典；返回因子表，固定禁用未来引用 |
+| `neutralize_factors(factors, *, provider=None, market_cap='total_mv', min_samples=3)` | 按交易日进行行业＋对数市值联合回归，返回残差因子表 |
 | `calculate_forward_returns(factors, horizons=(1,5,20), *, provider=None, price='open', entry_lag=1, adjust=None)` | 输入因子表索引；返回以正整数持有期为列的收益标签表 |
 | `analyze_factors(factors, forward_returns, *, quantiles=5, min_samples=2, turnover_lag=1)` | 分析已有因子与标签，返回 FactorAnalysisResult |
-| `factor_analysis(...)` | 连续完成上述三步，返回 FactorAnalysisResult |
+| `factor_analysis(..., neutralize=False, market_cap='total_mv', neutralize_min_samples=3)` | 因子计算后可先中性化，再生成标签并评估，返回 FactorAnalysisResult |
 | `FactorAnalysisResult.save(directory)` | 导出 8 张 CSV 和 config.json |
 
 `provider=None` 使用全局 D，`adjust=None` 继承 provider 复权配置。因子表索引为 `(instrument, datetime)`，因子列名为非空字符串；标签列为正整数持有期。
 Series 也可输入，name 分别为因子名或持有期。索引必须唯一，datetime 为时间戳；分析以因子表索引为准，缺少标签时保留 NaN，无穷值转换为 NaN。
+
+### 行业＋市值联合中性化
+
+{py:func}`qlib.contrib.report.analysis_model.analysis_model_performance.neutralize_factors`
+在每个交易日、每个因子的有效股票横截面上，进行等权普通最小二乘回归：
+
+```text
+factor_i = intercept + beta × ln(market_cap_i) + 行业哑变量效应 + residual_i
+```
+
+返回的 `residual_i` 即中性化因子。行业与市值在同一次回归中控制。
+默认使用总市值 `total_mv`，也可以指定流通市值 `circ_mv`。
+
+#### 已有因子中性化后计算 IC
+
+```python
+from qlib.data import D
+from qlib.contrib.eva.alpha import calc_ic
+from qlib.contrib.report.analysis_model import neutralize_factors
+
+data = D.features("csi300", [
+    "-Delta((2 * $close - $low - $high) / ($high - $low), 1)",
+    "Ref($close, -6) / Ref($close, -1) - 1",
+], "2025-01-01", "2025-12-31")
+
+pred = data.iloc[:, 0].rename("alpha")
+label = data.iloc[:, 1]
+neutral = neutralize_factors(pred, market_cap="total_mv", min_samples=20)
+ic, ric = calc_ic(neutral["alpha"], label)
+```
+
+输入可为 Series 或多因子 DataFrame；输出总是 DataFrame，列名保留，
+索引规范为排序后的 `(instrument, datetime)`。股票代码使用数据提供器的标准格式，如 `000001.SZ`。
+只传入需要中性化的因子列；未来收益标签单独用于评估。
+
+#### 批量分析中启用
+
+```python
+result = factor_analysis(
+    "csi300", {"momentum20": "$close / Ref($close, 20) - 1"},
+    "2025-01-01", "2025-12-31",
+    neutralize=True, market_cap="total_mv", neutralize_min_samples=20,
+    horizons=(1, 5, 20), quantiles=5,
+)
+```
+
+`neutralize` 默认 False。启用后，`result.factors` 保存残差，IC、分组收益、换手率和自相关
+都使用残差因子；收益标签保持原有定义。`config.json` 的 `neutralization` 记录方法、市值字段及最小样本数。
+`neutralize_min_samples` 控制回归样本数，与 IC 报告的 `min_samples` 独立。
+
+#### 时点、样本与退化情况
+
+- 行业使用 `industry/*.txt` 在**因子当日**有效的历史区间，不使用 `stock_basic` 的当前行业快照。
+  市值使用同日原始字段；只根据传入因子行拟合，不自动扩展到全市场，不使用未来收益筛选样本。
+- 行业缺失、因子非有限或市值缺失、非有限、非正时，该行该因子输出 NaN；不前填或插补。
+  不同行业同时覆盖同一股票日期时明确报错；缺少整个行业或市值数据源时也报错。
+- 每个因子按自身有效样本独立回归。至少满足 `min_samples`（默认 3，可设为不小于 2 的整数），
+  且有效股票数必须大于设计矩阵秩，保留正的残差自由度，否则该日该因子输出 NaN。
+- 设计矩阵使用全部有效行业哑变量（已包含截距空间）与居中、缩放后的自然对数市值；
+  通过 SVD 最小二乘处理共线控制变量。只有一个行业、恒定市值或行业内恒定市值时仍可在自由度足够时计算。
+- 输出未经去极值或标准化的等权残差。完全被控制变量解释的因子残差置零，避免浮点误差形成虚假信号。
+  全零残差没有横截面区分度，对应 IC 可为 NaN。
 
 ### 标签时点
 
@@ -99,7 +162,7 @@ turnover_lag 按输入日期序列计数，自相关采用相同 lag。
 
 | 属性 / CSV | 索引与内容 |
 |---|---|
-| `factors` | 股票、日期 × 因子值 |
+| `factors` | 股票、日期 × 因子值；启用中性化时为残差 |
 | `forward_returns` | 股票、日期 × 各持有期标签 |
 | `summary` | `(factor,horizon)`：IC 均值/标准差/IR/正值比例/有效日期数，覆盖率、多空均值/标准差/正值比例、上下组换手、自相关 |
 | `daily` | `(factor,horizon,datetime)`：样本数、coverage、pair_coverage、ic、rank_ic、universe_return、long_short_return |

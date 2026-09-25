@@ -28,6 +28,8 @@ API 导航与约定
      - :func:`qlib.contrib.eva.alpha.calc_ic`
    * - 因子报告
      - :func:`qlib.contrib.report.analysis_model.analysis_model_performance.factor_analysis`
+   * - 行业＋市值中性化
+     - :func:`qlib.contrib.report.analysis_model.analysis_model_performance.neutralize_factors`
    * - 策略
      - :class:`qlib.contrib.strategy.signal_strategy.TopkStrategy`
    * - 回测
@@ -48,7 +50,7 @@ API 导航与约定
    from qlib.contrib.strategy import TopkStrategy, WeightStrategy
    from qlib.contrib.report.analysis_model import (
        FactorAnalysisResult, calculate_factors, calculate_forward_returns,
-       analyze_factors, factor_analysis,
+       analyze_factors, factor_analysis, neutralize_factors,
    )
    from qlib.backtest import backtest, BacktestEngine, BacktestResult, ExchangeConfig
 

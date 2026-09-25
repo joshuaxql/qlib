@@ -16,6 +16,7 @@ Qlib 是面向本地股票量化研究的 Python 工具库，覆盖行情与财�
 | 历史过滤 | ST、上市天数、行业、指数成分、可交易性与表达式过滤；支持组合条件 |
 | PIT 财务 | Tushare `fina_indicator` 全部 163 个数值指标；保留公告与修订历史，每股一组 `pit.data` / `pit.index` |
 | 因子评估 | IC、RankIC、ICIR、多空收益、自相关、分组收益与换手率；多因子、多持有期分析及报告导出 |
+| 因子中性化 | 按交易日联合控制历史行业与对数市值，使用回归残差评估因子；支持总市值或流通市值 |
 | 策略与回测 | `TopkStrategy`、`TopkDropoutStrategy`、`WeightStrategy`；日频撮合、费用、滑点、涨跌停、成交量约束及持仓报告 |
 | 数值加速 | 纯 C 实现 rolling、expanding 和 PIT 查询核心，使用 MinGW-w64 构建，通过 NumPy / ctypes 调用 |
 
@@ -146,6 +147,20 @@ analysis.save("outputs/factor_analysis")
 ```
 
 默认标签为下一交易日开盘进入、持有指定交易日数后的开盘价收益。指标口径与底层评估接口见[因子分析](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/factor.html)。
+
+在 `factor_analysis()` 中设置 `neutralize=True, market_cap="total_mv", neutralize_min_samples=20`，
+即可先进行行业＋市值联合中性化，再评估残差因子。也可单独处理已有因子：
+
+```python
+from qlib.contrib.report.analysis_model import neutralize_factors
+
+neutral = neutralize_factors(
+    features[["$close / Ref($close, 20) - 1"]],
+    provider=provider, market_cap="total_mv", min_samples=20,
+)
+```
+
+行业和市值使用因子当日数据，缺失或无效样本保留 NaN；`market_cap="circ_mv"` 可改用流通市值。
 
 ### 5. 运行回测
 

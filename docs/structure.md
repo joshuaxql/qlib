@@ -34,7 +34,7 @@ from qlib.data import D, LocalProvider
 from qlib.backtest import backtest, BacktestEngine, ExchangeConfig
 from qlib.contrib.strategy import TopkDropoutStrategy, TopkStrategy, WeightStrategy
 from qlib.contrib.eva.alpha import calc_ic
-from qlib.contrib.report.analysis_model import factor_analysis
+from qlib.contrib.report.analysis_model import factor_analysis, neutralize_factors
 ```
 
 `qlib.data.D` 与 `qlib.data.data.D` 是同一实例。

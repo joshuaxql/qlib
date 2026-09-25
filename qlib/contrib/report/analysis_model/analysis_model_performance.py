@@ -58,6 +58,90 @@ def calculate_factors(instruments, factors, start_time=None, end_time=None, *, p
     return pd.DataFrame({name: data[expr] for name, expr in definitions.items()}, index=data.index)
 
 
+def neutralize_factors(factors, *, provider=None, market_cap="total_mv", min_samples=3):
+    """Return daily cross-sectional industry + log-market-cap OLS residuals.
+
+    Args:
+        factors: Numeric Series or DataFrame indexed by (instrument, datetime),
+            using canonical provider stock codes. Each column is fitted separately
+            on its own finite observations within the supplied universe.
+        provider: Local data provider; None uses the global D provider.
+        market_cap: Daily size field, either total_mv (default) or circ_mv.
+        min_samples: Minimum valid stocks per date and factor, at least 2.
+
+    Returns:
+        A float DataFrame with the factor columns and sorted canonical index.
+        Missing factors/industries and nonpositive or nonfinite caps remain NaN.
+        A fit needs at least min_samples rows and positive residual degrees of
+        freedom (sample count > design rank); otherwise its output is NaN.
+
+    Industry membership comes from historical industry/* intervals on the factor
+    date. No current stock_basic snapshot, future return or forward fill is used.
+    Multiple simultaneous industry memberships raise ValueError. Missing entire
+    industry or market-cap sources raise rather than silently disabling a control.
+    The design uses all observed industry dummies (which span an intercept) and
+    centered/scaled natural-log cap. SVD least squares handles collinear controls.
+    Output is unweighted residuals, without winsorization or standardization.
+    """
+    min_samples = _positive_int(min_samples, "min_samples", 2)
+    if market_cap not in ("total_mv", "circ_mv"):
+        raise ValueError("market_cap must be total_mv or circ_mv")
+    values = _panel(factors, "factor")
+    result = pd.DataFrame(np.nan, index=values.index, columns=values.columns)
+    if values.empty:
+        return result
+    provider = D if provider is None else provider
+    dates = values.index.get_level_values("datetime")
+    if not dates.isin(provider.calendar()).all():
+        raise ValueError("Factor dates must belong to the provider trading calendar")
+    days = dates.unique().sort_values()
+    codes = values.index.get_level_values("instrument").unique()
+    date_positions = days.get_indexer(dates)
+    code_positions = codes.get_indexer(values.index.get_level_values("instrument"))
+    industries = provider.industries()
+    if not industries:
+        raise ValueError("Industry neutralization requires historical industry/* membership data")
+    industry = np.full(len(values), -1, dtype=int)
+    for number, name in enumerate(industries):
+        mask = provider.universe(f"industry/{name}", days[0], days[-1])
+        member = mask.reindex(index=days, columns=codes, fill_value=False).to_numpy(dtype=bool)[
+            date_positions, code_positions]
+        conflict = member & (industry >= 0)
+        if conflict.any():
+            example = values.index[np.flatnonzero(conflict)[0]]
+            raise ValueError(f"Multiple historical industry memberships for {example}")
+        industry[member] = number
+    caps = provider.daily(codes.tolist(), [market_cap], days[0], days[-1], adjust="none")
+    caps = caps[market_cap].reindex(values.index).to_numpy(dtype=float)
+    eligible = (industry >= 0) & np.isfinite(caps) & (caps > 0)
+    log_cap = np.full(len(values), np.nan)
+    log_cap[eligible] = np.log(caps[eligible])
+    data = values.to_numpy()
+    output = np.full(data.shape, np.nan)
+    for positions in values.groupby(level="datetime", sort=False).indices.values():
+        for column in range(data.shape[1]):
+            rows = positions[eligible[positions] & np.isfinite(data[positions, column])]
+            if len(rows) < min_samples:
+                continue
+            _, groups = np.unique(industry[rows], return_inverse=True)
+            design = np.eye(groups.max() + 1)[groups]
+            size = log_cap[rows] - log_cap[rows].mean()
+            scale = np.max(np.abs(size))
+            if scale > 0:
+                design = np.column_stack([design, size / scale])
+            target = data[rows, column] - data[rows, column].mean()
+            coefficients, _, rank, _ = np.linalg.lstsq(design, target, rcond=None)
+            if len(rows) <= rank:
+                continue
+            residual = target - design @ coefficients
+            # An exactly explained factor must not become a numerical-noise signal.
+            tolerance = np.finfo(float).eps * max(design.shape) * np.linalg.norm(target)
+            if np.linalg.norm(residual) <= tolerance:
+                residual[:] = 0.0
+            output[rows, column] = residual
+    return pd.DataFrame(output, index=values.index, columns=values.columns)
+
+
 def calculate_forward_returns(factors, horizons=(1, 5, 20), *, provider=None, price="open", entry_lag=1,
                               adjust=None):
     """Label signal t with price[t+entry_lag+h] / price[t+entry_lag] - 1.
@@ -225,13 +309,27 @@ def analyze_factors(factors, forward_returns, *, quantiles=5, min_samples=2, tur
 
 
 def factor_analysis(instruments, factors, start_time=None, end_time=None, *, provider=None,
-                    horizons=(1, 5, 20), price="open", entry_lag=1, adjust=None,
-                    quantiles=5, min_samples=2, turnover_lag=1):
-    """Calculate factors, build forward labels and return a complete report."""
+                     horizons=(1, 5, 20), price="open", entry_lag=1, adjust=None,
+                     quantiles=5, min_samples=2, turnover_lag=1, neutralize=False,
+                     market_cap="total_mv", neutralize_min_samples=3):
+    """Calculate factors, optionally neutralize, build labels and return a report.
+
+    neutralize=True applies daily industry + log-market-cap neutralize_factors
+    before all diagnostics. market_cap and neutralize_min_samples configure that
+    fit independently of min_samples, which controls IC reporting. The returned
+    factors contain residuals when enabled; forward-return labels are unchanged.
+    """
+    if not isinstance(neutralize, bool):
+        raise ValueError("neutralize must be a bool")
     values = calculate_factors(instruments, factors, start_time, end_time, provider=provider, adjust=adjust)
+    if neutralize:
+        values = neutralize_factors(values, provider=provider, market_cap=market_cap,
+                                    min_samples=neutralize_min_samples)
     returns = calculate_forward_returns(values, horizons, provider=provider, price=price,
                                         entry_lag=entry_lag, adjust=adjust)
     result = analyze_factors(values, returns, quantiles=quantiles, min_samples=min_samples, turnover_lag=turnover_lag)
     result.config.update({"price": price, "entry_lag": int(entry_lag),
-                          "adjust": (D if provider is None else provider).adjust if adjust is None else adjust})
+                           "adjust": (D if provider is None else provider).adjust if adjust is None else adjust})
+    result.config["neutralization"] = ({"method": "industry_log_market_cap", "market_cap": market_cap,
+                                        "min_samples": int(neutralize_min_samples)} if neutralize else None)
     return result

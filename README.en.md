@@ -16,6 +16,7 @@ Qlib is a Python library for local stock-market quantitative research. It covers
 | Historical filters | ST status, listing age, industry, index membership, tradability, and expression filters with composable conditions |
 | Point-in-time financials | All 163 numeric fields from Tushare `fina_indicator`; announcement and revision history stored in one `pit.data` / `pit.index` pair per stock |
 | Factor evaluation | IC, RankIC, ICIR, long-short returns, autocorrelation, quantile returns, and turnover; multi-factor, multi-horizon analysis and report export |
+| Factor neutralization | Daily joint regression on historical industry membership and log market cap; evaluate residuals using total or circulating market capitalization |
 | Strategies and backtesting | `TopkStrategy`, `TopkDropoutStrategy`, and `WeightStrategy`; daily execution, fees, slippage, price limits, volume constraints, and position reports |
 | Native acceleration | Pure C rolling, expanding, and PIT query kernels, built with MinGW-w64 and accessed through NumPy / ctypes |
 
@@ -146,6 +147,21 @@ analysis.save("outputs/factor_analysis")
 ```
 
 Default labels enter at the next trading session's open and measure the open-to-open return over the specified holding period. Metric definitions and lower-level evaluation APIs are documented in [factor analysis](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/factor.html).
+
+Set `neutralize=True, market_cap="total_mv", neutralize_min_samples=20` in `factor_analysis()`
+to jointly neutralize industry and size exposures before evaluating residual factors. You can also process an existing factor panel:
+
+```python
+from qlib.contrib.report.analysis_model import neutralize_factors
+
+neutral = neutralize_factors(
+    features[["$close / Ref($close, 20) - 1"]],
+    provider=provider, market_cap="total_mv", min_samples=20,
+)
+```
+
+Industry membership and market cap are taken on the factor date; missing or invalid observations remain NaN.
+Use `market_cap="circ_mv"` for circulating market capitalization.
 
 ### 5. Run a backtest
 
