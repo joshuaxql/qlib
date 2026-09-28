@@ -39,6 +39,8 @@ print(analysis.summary)
 analysis.save("outputs/factor_analysis")
 ```
 
+默认先进行均值±3倍标准差去极值、行业＋对数总市值中性化、Z-score 标准化，再评估因子。
+需要本地历史行业及总市值数据；可通过 `winsorize=None, neutralize=False, standardize=False` 关闭全部预处理。
 默认收益标签从信号后的下一交易日开盘起算，详见[因子分析](factor.md)。
 
 ## 日频回测

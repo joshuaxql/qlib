@@ -149,7 +149,8 @@ class FactorProviderTest(unittest.TestCase):
 
     def test_end_to_end_and_validation(self):
         result = factor_analysis("sample", {"level": "$close", "momentum": "$close / Ref($close, 1) - 1"},
-                                 provider=self.provider, horizons=[1, 2], quantiles=2, min_samples=2)
+                                 provider=self.provider, horizons=[1, 2], quantiles=2, min_samples=2,
+                                 winsorize=None, neutralize=False, standardize=False)
         self.assertEqual(len(result.summary), 4)
         self.assertEqual(result.config["adjust"], "hfq")
         self.assertEqual(result.config["entry_lag"], 1)

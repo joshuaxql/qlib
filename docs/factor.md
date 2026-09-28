@@ -65,14 +65,97 @@ result.save("outputs/factor_analysis")
 | 函数 / 类 | 输入与输出 |
 |---|---|
 | `calculate_factors(instruments, factors, start_time=None, end_time=None, *, provider=None, adjust=None)` | factors 为表达式、列表或名称到表达式的字典；返回因子表，固定禁用未来引用 |
+| `winsorize_factors(factors, *, method='std', n=3.0, mad_scale=1.4826, ddof=0)` | 按日横截面进行均值标准差或中位数 MAD 去极值，截断到上下界 |
+| `standardize_factors(factors, *, ddof=0)` | 按日、按因子进行 Z-score 标准化 |
+| `preprocess_factors(...)` | 对已有因子表依次去极值、中性化、标准化；各步骤默认开启 |
 | `neutralize_factors(factors, *, provider=None, market_cap='total_mv', min_samples=3)` | 按交易日进行行业＋对数市值联合回归，返回残差因子表 |
 | `calculate_forward_returns(factors, horizons=(1,5,20), *, provider=None, price='open', entry_lag=1, adjust=None)` | 输入因子表索引；返回以正整数持有期为列的收益标签表 |
 | `analyze_factors(factors, forward_returns, *, quantiles=5, min_samples=2, turnover_lag=1)` | 分析已有因子与标签，返回 FactorAnalysisResult |
-| `factor_analysis(..., neutralize=False, market_cap='total_mv', neutralize_min_samples=3)` | 因子计算后可先中性化，再生成标签并评估，返回 FactorAnalysisResult |
+| `factor_analysis(..., winsorize='std', neutralize=True, standardize=True)` | 因子计算后默认依次去极值、中性化、标准化，再生成标签并评估，返回 FactorAnalysisResult |
 | `FactorAnalysisResult.save(directory)` | 导出 8 张 CSV 和 config.json |
 
 `provider=None` 使用全局 D，`adjust=None` 继承 provider 复权配置。因子表索引为 `(instrument, datetime)`，因子列名为非空字符串；标签列为正整数持有期。
 Series 也可输入，name 分别为因子名或持有期。索引必须唯一，datetime 为时间戳；分析以因子表索引为准，缺少标签时保留 NaN，无穷值转换为 NaN。
+
+### 去极值与标准化
+
+这些操作按**每个交易日的股票横截面、每个因子列**独立计算，仅使用输入表中的有限值。
+与表达式 `Mean($close, 20)` 的时间窗口统计不同，它们不跨日期拟合，不依赖未来收益标签。
+输入支持 Series / DataFrame，返回保留原列名、按 `(instrument, datetime)` 排序的 DataFrame；不会修改输入。
+
+#### 两种去极值方法
+
+{py:func}`qlib.contrib.report.analysis_model.analysis_model_performance.winsorize_factors`
+将超界值截断到边界，保留这些股票行：
+
+| `method` | 计算方法 | 默认边界 |
+|---|---|---|
+| `"std"`（默认） | 均值标准差法（均值方差法）：μ 为均值，σ 为标准差 | μ ± 3σ |
+| `"mad"` | 中位数法：m = median(x)，MAD = median(abs(x − m)) | m ± 3 × 1.4826 × MAD |
+
+`n` 控制倍数，默认 3；`mad_scale` 默认 1.4826，为正态一致性缩放，可设为 1 使用原始 MAD。
+`ddof` 默认 0（总体标准差），可设为 1 使用样本标准差，仅影响 `std` 方法。
+
+```python
+from qlib.contrib.report.analysis_model import winsorize_factors, standardize_factors
+
+# pred 为已有因子 Series 或 DataFrame
+clipped_std = winsorize_factors(pred, method="std", n=3, ddof=0)
+clipped_mad = winsorize_factors(pred, method="mad", n=3, mad_scale=1.4826)
+scaled = standardize_factors(clipped_mad)
+```
+
+#### Z-score 标准化
+
+{py:func}`qlib.contrib.report.analysis_model.analysis_model_performance.standardize_factors`
+使用 `(x − mean(x)) / std(x)`，默认 `ddof=0`。非恒定的有效横截面得到均值约为 0、
+按同一 `ddof` 计算的方差约为 1。该函数本身不去极值，也不进行中性化。
+
+退化与缺失值规则：
+
+- NaN、正负无穷不参与统计，输出保持 NaN；不同因子可以使用不同的有效股票集合。
+- 标准差法去极值和标准化中，有效数 `N <= ddof` 时该日该列输出 NaN。
+- 有效数足够时，恒定横截面去极值后保持原值，标准化后为 0；单个有效值在 `ddof=0` 时也标准化为 0。
+- 中位数法的 MAD 为 0 时，上下界都等于中位数，所有有效值截断到中位数。
+  因此高度集中的离散因子可能被压为常数，随后标准化为 0，IC 可能为 NaN。
+
+#### 组合处理与批量报告
+
+{py:func}`qlib.contrib.report.analysis_model.analysis_model_performance.preprocess_factors`
+提供固定处理顺序：**去极值 → 行业＋市值中性化 → Z-score 标准化**。
+先去极值可减少极端因子值对回归的影响；最后只做横截面线性缩放，可保留中性化残差的正交性。
+
+```python
+from qlib.contrib.report.analysis_model import preprocess_factors, factor_analysis
+
+processed = preprocess_factors(
+    pred,
+    winsorize="std", winsorize_n=3,
+    neutralize=True, market_cap="total_mv", neutralize_min_samples=20,
+    standardize=True, ddof=0,
+)
+
+result = factor_analysis(
+    "csi300", {"momentum20": "$close / Ref($close, 20) - 1"},
+    "2025-01-01", "2025-12-31",
+    winsorize="std", winsorize_n=3,
+    neutralize=True, neutralize_min_samples=20,
+    standardize=True,
+    horizons=(1, 5, 20), quantiles=5,
+)
+```
+
+两接口默认开启全部步骤：`winsorize="std"`、`winsorize_n=3`、`neutralize=True`、`standardize=True`，
+中性化默认使用 `market_cap="total_mv"`，标准差口径默认 `ddof=0`。
+因此默认调用需要历史行业归属和总市值数据。可用 `winsorize=None`、`neutralize=False`、
+`standardize=False` 分别关闭对应步骤；三项同时关闭即可分析原始因子。
+改用中位数法时设置 `winsorize="mad"`。关闭中性化后，单独去极值、标准化无需行业或市值数据。
+组合接口中的 `ddof` 同时控制标准差法去极值和 Z-score，
+如需两步使用不同口径，可分别调用独立函数。
+
+`result.factors` 和所有报告指标使用处理后的因子；`forward_returns` 保持原有收益标签定义。
+`config.json` 的 `preprocessing` 保存实际启用的处理顺序、去极值方法与参数、标准化参数；
+`neutralization` 保存中性化参数。只向预处理函数传入因子列，不要传入未来收益标签。
 
 ### 行业＋市值联合中性化
 
@@ -114,12 +197,13 @@ ic, ric = calc_ic(neutral["alpha"], label)
 result = factor_analysis(
     "csi300", {"momentum20": "$close / Ref($close, 20) - 1"},
     "2025-01-01", "2025-12-31",
-    neutralize=True, market_cap="total_mv", neutralize_min_samples=20,
+    winsorize=None, neutralize=True, standardize=False,
+    market_cap="total_mv", neutralize_min_samples=20,
     horizons=(1, 5, 20), quantiles=5,
 )
 ```
 
-`neutralize` 默认 False。启用后，`result.factors` 保存残差，IC、分组收益、换手率和自相关
+`neutralize` 默认 True。上例关闭去极值和标准化以单独中性化，此时 `result.factors` 保存残差，IC、分组收益、换手率和自相关
 都使用残差因子；收益标签保持原有定义。`config.json` 的 `neutralization` 记录方法、市值字段及最小样本数。
 `neutralize_min_samples` 控制回归样本数，与 IC 报告的 `min_samples` 独立。
 
@@ -162,7 +246,7 @@ turnover_lag 按输入日期序列计数，自相关采用相同 lag。
 
 | 属性 / CSV | 索引与内容 |
 |---|---|
-| `factors` | 股票、日期 × 因子值；启用中性化时为残差 |
+| `factors` | 股票、日期 × 最终因子值，包含已启用的去极值、中性化和标准化处理 |
 | `forward_returns` | 股票、日期 × 各持有期标签 |
 | `summary` | `(factor,horizon)`：IC 均值/标准差/IR/正值比例/有效日期数，覆盖率、多空均值/标准差/正值比例、上下组换手、自相关 |
 | `daily` | `(factor,horizon,datetime)`：样本数、coverage、pair_coverage、ic、rank_ic、universe_return、long_short_return |

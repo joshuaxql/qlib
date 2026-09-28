@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import json
 from pathlib import Path
+from numbers import Real
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,12 @@ def _positive_int(value, name, minimum=1):
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < minimum:
         raise ValueError(f"{name} must be an integer >= {minimum}")
     return int(value)
+
+
+def _positive_number(value, name):
+    if isinstance(value, bool) or not isinstance(value, Real) or not np.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a positive finite number")
+    return float(value)
 
 
 def _panel(frame, name):
@@ -56,6 +63,130 @@ def calculate_factors(instruments, factors, start_time=None, end_time=None, *, p
     expressions = list(dict.fromkeys(definitions.values()))
     data = provider.features(instruments, expressions, start_time, end_time, allow_future=False, adjust=adjust)
     return pd.DataFrame({name: data[expr] for name, expr in definitions.items()}, index=data.index)
+
+
+def winsorize_factors(factors, *, method="std", n=3.0, mad_scale=1.4826, ddof=0):
+    """Clip each date/factor cross-section using std or median absolute deviation.
+
+    Args:
+        factors: Series or DataFrame with instrument/datetime MultiIndex.
+        method: 'std' (default) clips to mean +/- n * std; 'mad' clips to median +/-
+            n * mad_scale * median(abs(x - median(x))). Values are capped,
+            not dropped. Statistics use only this date/column's finite inputs.
+        n: Positive finite clipping multiplier, default 3.
+        mad_scale: Positive MAD multiplier, default 1.4826 (normal-consistent
+            scale); set to 1 to use unscaled MAD. Only used by method='mad'.
+        ddof: Nonnegative standard-deviation degrees-of-freedom correction,
+            default 0 (population). Only used by method='std'.
+
+    Returns:
+        DataFrame with original columns and sorted (instrument, datetime) index.
+        NaN/inf inputs remain NaN. A zero MAD collapses valid values to the
+        median. For std, count <= ddof gives NaN, and constants stay constant.
+        The input is not modified. No market data or future labels are read.
+    """
+    if method not in ("std", "mad"):
+        raise ValueError("method must be std or mad")
+    n = _positive_number(n, "n")
+    mad_scale = _positive_number(mad_scale, "mad_scale")
+    ddof = _positive_int(ddof, "ddof", 0)
+    values = _panel(factors, "factor")
+    data = values.to_numpy()
+    output = np.full(data.shape, np.nan)
+    for positions in values.groupby(level="datetime", sort=False).indices.values():
+        for column in range(data.shape[1]):
+            rows = positions[np.isfinite(data[positions, column])]
+            if not len(rows) or (method == "std" and len(rows) <= ddof):
+                continue
+            sample = data[rows, column]
+            # Scale first so finite but very large inputs cannot overflow moments.
+            magnitude = np.max(np.abs(sample)) or 1.0
+            sample = sample / magnitude
+            if method == "std":
+                center, spread = sample.mean(), sample.std(ddof=ddof)
+            else:
+                center = np.median(sample)
+                spread = np.median(np.abs(sample - center))
+            with np.errstate(over="ignore"):
+                width = n * spread * (mad_scale if method == "mad" else 1.0)
+            output[rows, column] = np.clip(sample, center - width, center + width) * magnitude
+    return pd.DataFrame(output, index=values.index, columns=values.columns)
+
+
+def standardize_factors(factors, *, ddof=0):
+    """Return per-date, per-factor Z-scores: (x - mean) / std.
+
+    Accept a Series or DataFrame with instrument/datetime MultiIndex and return
+    a DataFrame with the original columns and sorted canonical index. Finite
+    values alone define each cross-section; NaN/inf remain NaN. ddof defaults
+    to 0 (population variance), and must be a nonnegative integer. When count
+    <= ddof the cross-section is NaN; otherwise constant samples map to zero.
+    No filling, clipping, market-data lookup or future-label filtering occurs.
+    """
+    ddof = _positive_int(ddof, "ddof", 0)
+    values = _panel(factors, "factor")
+    data = values.to_numpy()
+    output = np.full(data.shape, np.nan)
+    for positions in values.groupby(level="datetime", sort=False).indices.values():
+        for column in range(data.shape[1]):
+            rows = positions[np.isfinite(data[positions, column])]
+            if len(rows) <= ddof:
+                continue
+            sample = data[rows, column]
+            if np.all(sample == sample[0]):
+                output[rows, column] = 0.0
+                continue
+            sample = sample / np.max(np.abs(sample))
+            centered = sample - sample.mean()
+            spread = sample.std(ddof=ddof)
+            if spread > 0:
+                output[rows, column] = centered / spread
+    return pd.DataFrame(output, index=values.index, columns=values.columns)
+
+
+def preprocess_factors(factors, *, provider=None, winsorize="std", winsorize_n=3.0,
+                       mad_scale=1.4826, neutralize=True, market_cap="total_mv",
+                       neutralize_min_samples=3, standardize=True, ddof=0):
+    """Apply optional winsorization -> industry/size neutralization -> Z-score.
+
+    Defaults apply mean +/- 3 std clipping, industry/log-total-cap neutralization,
+    then Z-score standardization. Set winsorize=None, neutralize=False and/or
+    standardize=False to disable individual steps. winsorize may also be 'mad'.
+    winsorize_n/mad_scale configure winsorize_factors;
+    market_cap/neutralize_min_samples configure neutralize_factors; ddof controls
+    std-based winsorization and standardization. provider is only needed for
+    neutralization. The result is a canonical DataFrame; input is never mutated.
+    Only supplied factor rows determine statistics; do not include return labels.
+    """
+    _preprocessing_config(winsorize, winsorize_n, mad_scale, neutralize, standardize, ddof)
+    values = _panel(factors, "factor")
+    if winsorize is not None:
+        values = winsorize_factors(values, method=winsorize, n=winsorize_n, mad_scale=mad_scale, ddof=ddof)
+    if neutralize:
+        values = neutralize_factors(values, provider=provider, market_cap=market_cap,
+                                    min_samples=neutralize_min_samples)
+    if standardize:
+        values = standardize_factors(values, ddof=ddof)
+    return values
+
+
+def _preprocessing_config(winsorize, winsorize_n, mad_scale, neutralize, standardize, ddof):
+    """Validate processing switches and produce JSON-serializable settings."""
+    if winsorize not in (None, "std", "mad"):
+        raise ValueError("winsorize must be None, std or mad")
+    if not isinstance(neutralize, bool) or not isinstance(standardize, bool):
+        raise ValueError("neutralize and standardize must be bools")
+    n = _positive_number(winsorize_n, "winsorize_n")
+    scale = _positive_number(mad_scale, "mad_scale")
+    ddof = _positive_int(ddof, "ddof", 0)
+    return {
+        "order": [name for name, enabled in (("winsorize", winsorize is not None),
+                  ("neutralize", neutralize), ("standardize", standardize)) if enabled],
+        "winsorization": ({"method": winsorize, "n": n,
+                           **({"mad_scale": scale} if winsorize == "mad" else {"ddof": ddof})}
+                          if winsorize is not None else None),
+        "standardization": {"method": "zscore", "ddof": ddof} if standardize else None,
+    }
 
 
 def neutralize_factors(factors, *, provider=None, market_cap="total_mv", min_samples=3):
@@ -310,21 +441,23 @@ def analyze_factors(factors, forward_returns, *, quantiles=5, min_samples=2, tur
 
 def factor_analysis(instruments, factors, start_time=None, end_time=None, *, provider=None,
                      horizons=(1, 5, 20), price="open", entry_lag=1, adjust=None,
-                     quantiles=5, min_samples=2, turnover_lag=1, neutralize=False,
-                     market_cap="total_mv", neutralize_min_samples=3):
-    """Calculate factors, optionally neutralize, build labels and return a report.
+                     quantiles=5, min_samples=2, turnover_lag=1, neutralize=True,
+                     market_cap="total_mv", neutralize_min_samples=3, winsorize="std",
+                     winsorize_n=3.0, mad_scale=1.4826, standardize=True, ddof=0):
+    """Calculate/preprocess factors, build labels and return a complete report.
 
     neutralize=True applies daily industry + log-market-cap neutralize_factors
     before all diagnostics. market_cap and neutralize_min_samples configure that
     fit independently of min_samples, which controls IC reporting. The returned
-    factors contain residuals when enabled; forward-return labels are unchanged.
+    factors contain processed values; forward-return labels are unchanged.
+    Optional steps run in order: winsorize ('std'/'mad'), neutralize, standardize
+    (Z-score). All are on by default, with std clipping at n=3; see preprocess_factors.
     """
-    if not isinstance(neutralize, bool):
-        raise ValueError("neutralize must be a bool")
+    processing = _preprocessing_config(winsorize, winsorize_n, mad_scale, neutralize, standardize, ddof)
     values = calculate_factors(instruments, factors, start_time, end_time, provider=provider, adjust=adjust)
-    if neutralize:
-        values = neutralize_factors(values, provider=provider, market_cap=market_cap,
-                                    min_samples=neutralize_min_samples)
+    values = preprocess_factors(values, provider=provider, winsorize=winsorize, winsorize_n=winsorize_n,
+                                mad_scale=mad_scale, neutralize=neutralize, market_cap=market_cap,
+                                neutralize_min_samples=neutralize_min_samples, standardize=standardize, ddof=ddof)
     returns = calculate_forward_returns(values, horizons, provider=provider, price=price,
                                         entry_lag=entry_lag, adjust=adjust)
     result = analyze_factors(values, returns, quantiles=quantiles, min_samples=min_samples, turnover_lag=turnover_lag)
@@ -332,4 +465,5 @@ def factor_analysis(instruments, factors, start_time=None, end_time=None, *, pro
                            "adjust": (D if provider is None else provider).adjust if adjust is None else adjust})
     result.config["neutralization"] = ({"method": "industry_log_market_cap", "market_cap": market_cap,
                                         "min_samples": int(neutralize_min_samples)} if neutralize else None)
+    result.config["preprocessing"] = processing
     return result

@@ -10,6 +10,7 @@
 | PIT 财务 | 公告时点、报告期、修订版本、合并存储 | `D.financial()`、`P()`、`PRef()` |
 | 因子评估 | IC、RankIC、多空收益、准确率、自相关及批量评估 | `qlib.contrib.eva.alpha` |
 | 因子中性化 | 按日控制历史行业与对数市值，输出联合回归残差 | `neutralize_factors()` |
+| 因子预处理 | 均值标准差 / 中位数 MAD 去极值、Z-score 标准化及组合流水线 | `winsorize_factors()`、`standardize_factors()`、`preprocess_factors()` |
 | 分析报告 | 多因子、多持有期、覆盖率、分组收益与换手、CSV 导出 | `factor_analysis()` |
 | 回测 | 次日执行、整手、费用、成交限制、退市结算、报告 | `qlib.backtest` |
 | 策略 | 定期 Topk、TopkDropout 换仓、外部目标权重 | `qlib.contrib.strategy` |

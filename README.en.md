@@ -15,8 +15,8 @@ Qlib is a Python library for local stock-market quantitative research. It covers
 | Factor expressions | Arithmetic, conditional, rolling, expanding, ranking, correlation, and regression operators; automatic warm-up history and optional rejection of future references |
 | Historical filters | ST status, listing age, industry, index membership, tradability, and expression filters with composable conditions |
 | Point-in-time financials | All 163 numeric fields from Tushare `fina_indicator`; announcement and revision history stored in one `pit.data` / `pit.index` pair per stock |
+| Factor preprocessing | Mean/std and median/MAD winsorization, Z-score standardization, and a combined winsorization–neutralization–standardization pipeline |
 | Factor evaluation | IC, RankIC, ICIR, long-short returns, autocorrelation, quantile returns, and turnover; multi-factor, multi-horizon analysis and report export |
-| Factor neutralization | Daily joint regression on historical industry membership and log market cap; evaluate residuals using total or circulating market capitalization |
 | Strategies and backtesting | `TopkStrategy`, `TopkDropoutStrategy`, and `WeightStrategy`; daily execution, fees, slippage, price limits, volume constraints, and position reports |
 | Native acceleration | Pure C rolling, expanding, and PIT query kernels, built with MinGW-w64 and accessed through NumPy / ctypes |
 
@@ -148,8 +148,10 @@ analysis.save("outputs/factor_analysis")
 
 Default labels enter at the next trading session's open and measure the open-to-open return over the specified holding period. Metric definitions and lower-level evaluation APIs are documented in [factor analysis](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/factor.html).
 
-Set `neutralize=True, market_cap="total_mv", neutralize_min_samples=20` in `factor_analysis()`
-to jointly neutralize industry and size exposures before evaluating residual factors. You can also process an existing factor panel:
+By default, `factor_analysis()` applies mean ± 3 standard-deviation winsorization,
+industry/log-total-market-cap neutralization, then Z-score standardization.
+`market_cap="total_mv"` is the default size field; `neutralize_min_samples` controls the minimum regression sample size (default 3).
+You can also neutralize an existing factor panel independently:
 
 ```python
 from qlib.contrib.report.analysis_model import neutralize_factors
@@ -162,6 +164,28 @@ neutral = neutralize_factors(
 
 Industry membership and market cap are taken on the factor date; missing or invalid observations remain NaN.
 Use `market_cap="circ_mv"` for circulating market capitalization.
+
+Daily cross-sectional preprocessing is also available: `winsorize_factors(..., method="std")`
+clips to mean ± n standard deviations; `method="mad"` clips to median ± n × 1.4826 × MAD.
+`standardize_factors()` computes Z-scores. The combined pipeline runs in order:
+**winsorization → neutralization → standardization**.
+
+```python
+from qlib.contrib.report.analysis_model import preprocess_factors
+
+processed = preprocess_factors(
+    features[["$close / Ref($close, 20) - 1"]], provider=provider,
+    winsorize="std", winsorize_n=3,
+    neutralize=True, neutralize_min_samples=20,
+    standardize=True,
+)
+```
+
+`factor_analysis()` accepts the same options. All steps are enabled by default,
+with `winsorize="std", winsorize_n=3`. Standard deviation uses `ddof=0`, and missing values remain NaN.
+Defaults require local historical industry membership and total market cap.
+Set `winsorize=None, neutralize=False, standardize=False` to disable all preprocessing, or use `winsorize="mad"` for median/MAD clipping.
+See [factor analysis](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/factor.html) for conventions and handling of zero MAD or constant samples.
 
 ### 5. Run a backtest
 

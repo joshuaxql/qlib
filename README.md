@@ -15,8 +15,8 @@ Qlib 是面向本地股票量化研究的 Python 工具库，覆盖行情与财�
 | 因子表达式 | 算术、条件、滚动、累计、排名、相关与回归算子；自动加载预热历史，可禁止未来引用 |
 | 历史过滤 | ST、上市天数、行业、指数成分、可交易性与表达式过滤；支持组合条件 |
 | PIT 财务 | Tushare `fina_indicator` 全部 163 个数值指标；保留公告与修订历史，每股一组 `pit.data` / `pit.index` |
+| 因子预处理 | 均值标准差、中位数 MAD 两种去极值方法，Z-score 标准化；可组合去极值、中性化、标准化 |
 | 因子评估 | IC、RankIC、ICIR、多空收益、自相关、分组收益与换手率；多因子、多持有期分析及报告导出 |
-| 因子中性化 | 按交易日联合控制历史行业与对数市值，使用回归残差评估因子；支持总市值或流通市值 |
 | 策略与回测 | `TopkStrategy`、`TopkDropoutStrategy`、`WeightStrategy`；日频撮合、费用、滑点、涨跌停、成交量约束及持仓报告 |
 | 数值加速 | 纯 C 实现 rolling、expanding 和 PIT 查询核心，使用 MinGW-w64 构建，通过 NumPy / ctypes 调用 |
 
@@ -148,8 +148,9 @@ analysis.save("outputs/factor_analysis")
 
 默认标签为下一交易日开盘进入、持有指定交易日数后的开盘价收益。指标口径与底层评估接口见[因子分析](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/factor.html)。
 
-在 `factor_analysis()` 中设置 `neutralize=True, market_cap="total_mv", neutralize_min_samples=20`，
-即可先进行行业＋市值联合中性化，再评估残差因子。也可单独处理已有因子：
+`factor_analysis()` 默认执行均值±3倍标准差去极值、行业＋对数总市值中性化、Z-score 标准化。
+`market_cap="total_mv"` 为默认市值口径，可通过 `neutralize_min_samples` 调整回归最小样本数（默认 3）。
+也可单独中性化已有因子：
 
 ```python
 from qlib.contrib.report.analysis_model import neutralize_factors
@@ -161,6 +162,26 @@ neutral = neutralize_factors(
 ```
 
 行业和市值使用因子当日数据，缺失或无效样本保留 NaN；`market_cap="circ_mv"` 可改用流通市值。
+
+还支持按日横截面去极值与标准化：`winsorize_factors(..., method="std")` 使用均值±n倍标准差，
+`method="mad"` 使用中位数±n×1.4826×MAD；`standardize_factors()` 计算 Z-score。
+组合处理固定按“去极值 → 中性化 → 标准化”的顺序执行：
+
+```python
+from qlib.contrib.report.analysis_model import preprocess_factors
+
+processed = preprocess_factors(
+    features[["$close / Ref($close, 20) - 1"]], provider=provider,
+    winsorize="std", winsorize_n=3,
+    neutralize=True, neutralize_min_samples=20,
+    standardize=True,
+)
+```
+
+`factor_analysis()` 也支持这些参数。各步骤默认开启，去极值默认 `winsorize="std", winsorize_n=3`；
+标准差采用 `ddof=0`，缺失值保留 NaN。默认需要本地历史行业和总市值数据。
+设置 `winsorize=None, neutralize=False, standardize=False` 可关闭全部预处理，`winsorize="mad"` 可改用中位数法。
+完整口径及零 MAD、恒定样本的处理见[因子分析文档](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/factor.html)。
 
 ### 5. 运行回测
 

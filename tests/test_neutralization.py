@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from qlib.data import LocalProvider
-from qlib.contrib.report.analysis_model import factor_analysis, neutralize_factors
+from qlib.contrib.report.analysis_model import factor_analysis, neutralize_factors, preprocess_factors
 
 
 class NeutralizationTest(unittest.TestCase):
@@ -165,8 +165,8 @@ class NeutralizationTest(unittest.TestCase):
 
     def test_report_integration_labels_and_saved_config(self):
         options = dict(provider=self.provider, horizons=(1,), quantiles=2)
-        raw = factor_analysis(self.codes, {"alpha": "$score"}, **options)
-        result = factor_analysis(self.codes, {"alpha": "$score"}, neutralize=True, **options)
+        raw = factor_analysis(self.codes, {"alpha": "$score"}, winsorize=None, neutralize=False, standardize=False, **options)
+        result = factor_analysis(self.codes, {"alpha": "$score"}, winsorize=None, standardize=False, **options)
         expected = neutralize_factors(raw.factors, provider=self.provider)
         pd.testing.assert_frame_equal(result.factors, expected)
         pd.testing.assert_frame_equal(result.forward_returns, raw.forward_returns)
@@ -186,6 +186,67 @@ class NeutralizationTest(unittest.TestCase):
         self.provider.clear_cache()
         with self.assertRaises(KeyError):
             neutralize_factors(self.factors, provider=self.provider)
+
+    def test_full_preprocessing_order_and_report_labels(self):
+        self.write(self.codes[-1], "score", [1000] * 4)
+        self.provider.clear_cache()
+        options = dict(provider=self.provider, horizons=(1,), quantiles=2)
+        raw = factor_analysis(self.codes, {"alpha": "$score"}, winsorize=None, neutralize=False, standardize=False, **options)
+        result = factor_analysis(self.codes, {"alpha": "$score"}, winsorize="mad", winsorize_n=2,
+                                 mad_scale=1, neutralize=True, standardize=True, **options)
+        for day, date in enumerate(self.dates):
+            y = raw.factors.xs(date, level="datetime").alpha.to_numpy()
+            median = np.median(y)
+            mad = np.median(np.abs(y - median))
+            clipped = np.clip(y, median - 2 * mad, median + 2 * mad)
+            residual = self.oracle(clipped, self.log_caps, self.groups[:, day])
+            expected = (residual - residual.mean()) / residual.std()
+            actual = result.factors.xs(date, level="datetime").alpha.to_numpy()
+            np.testing.assert_allclose(actual, expected, atol=1e-12)
+            self.assertAlmostEqual(np.dot(actual, self.log_caps), 0, places=10)
+            for group in (0, 1):
+                self.assertAlmostEqual(actual[self.groups[:, day] == group].mean(), 0, places=10)
+        pd.testing.assert_frame_equal(result.forward_returns, raw.forward_returns)
+        direct = preprocess_factors(raw.factors, provider=self.provider, winsorize="mad", winsorize_n=2,
+                                    mad_scale=1, neutralize=True, standardize=True)
+        pd.testing.assert_frame_equal(direct, result.factors)
+        result.save(self.root / "processed-report")
+        config = json.loads((self.root / "processed-report/config.json").read_text())
+        self.assertEqual(config["preprocessing"], {
+            "order": ["winsorize", "neutralize", "standardize"],
+            "winsorization": {"method": "mad", "n": 2.0, "mad_scale": 1.0},
+            "standardization": {"method": "zscore", "ddof": 0},
+        })
+
+    def test_preprocessing_without_market_data_and_explicit_noop(self):
+        pd.testing.assert_frame_equal(preprocess_factors(self.factors, winsorize=None, neutralize=False, standardize=False), self.factors)
+        for path in (self.root / "industry").glob("*.txt"):
+            path.unlink()
+        result = factor_analysis(self.codes, {"alpha": "$score"}, provider=self.provider,
+                                 horizons=(1,), quantiles=2, neutralize=False, ddof=1)
+        self.assertIsNone(result.config["neutralization"])
+        self.assertEqual(result.config["preprocessing"]["order"], ["winsorize", "standardize"])
+        for _, frame in result.factors.groupby(level="datetime"):
+            self.assertAlmostEqual(frame.alpha.mean(), 0)
+            self.assertAlmostEqual(frame.alpha.var(ddof=1), 1)
+
+    def test_default_pipeline_configuration_and_standardized_residuals(self):
+        result = factor_analysis(self.codes, {"alpha": "$score"}, provider=self.provider, horizons=(1,), quantiles=2)
+        raw = self.provider.features(self.codes, ["$score"], allow_future=False).rename(columns={"$score": "alpha"})
+        direct = preprocess_factors(raw, provider=self.provider)
+        pd.testing.assert_frame_equal(result.factors, direct)
+        self.assertEqual(result.config["preprocessing"], {
+            "order": ["winsorize", "neutralize", "standardize"],
+            "winsorization": {"method": "std", "n": 3.0, "ddof": 0},
+            "standardization": {"method": "zscore", "ddof": 0},
+        })
+        self.assertEqual(result.config["neutralization"]["market_cap"], "total_mv")
+        for day, date in enumerate(self.dates):
+            y = raw.xs(date, level="datetime").alpha.to_numpy()
+            clipped = np.clip(y, y.mean() - 3 * y.std(), y.mean() + 3 * y.std())
+            residual = self.oracle(clipped, self.log_caps, self.groups[:, day])
+            np.testing.assert_allclose(result.factors.xs(date, level="datetime").alpha,
+                                       (residual - residual.mean()) / residual.std(), atol=1e-12)
 
 
 if __name__ == "__main__":
