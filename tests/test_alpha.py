@@ -6,6 +6,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 from qlib.contrib.eva.alpha import (
     calc_ic, calc_all_ic, calc_long_short_prec, calc_long_short_return,
@@ -104,8 +105,15 @@ class OfficialAlphaTest(unittest.TestCase):
         self.assertAlmostEqual(actual.iloc[2], expected)
         self.assertNotAlmostEqual(actual.iloc[1], 1)
         self.assertAlmostEqual(pred_autocorr(pred, lag=2).iloc[2], 1)
-        with self.assertLogs("pred_autocorr", level="WARNING"):
-            frame_result = pred_autocorr(pd.DataFrame({"score": pred, "ignored": -pred}))
+        messages = []
+        handler = logger.add(messages.append, level="WARNING")
+        self.addCleanup(logger.remove, handler)
+        frame_result = pred_autocorr(pd.DataFrame({"score": pred, "ignored": -pred}))
+        self.assertEqual(len(messages), 1)
+        self.assertIn("1 extra columns ignored", messages[0].record["message"])
+        messages.clear()
+        pd.testing.assert_series_equal(actual, pred_autocorr(pred.to_frame("score")))
+        self.assertEqual(messages, [])
         pd.testing.assert_series_equal(actual, frame_result)
         renamed = pred.rename_axis(index={"instrument": "asset", "datetime": "date"})
         pd.testing.assert_series_equal(pred_autocorr(renamed, inst_col="asset", date_col="date"), actual)

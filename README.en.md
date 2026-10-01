@@ -203,7 +203,7 @@ result = backtest(
     provider=provider, initial_cash=1_000_000,
     exchange=ExchangeConfig(
         deal_price="open", lot_size=100,
-        buy_cost=0.0003, sell_cost=0.0003, min_cost=5,
+        buy_cost=0.0001, sell_cost=0.0001, sell_tax=0.0005, min_cost=5,
     ),
 )
 print(result.metrics)
@@ -212,7 +212,32 @@ result.save("outputs/backtest")
 
 Signals execute on the next trading session using raw prices and automatically read `up_limit` / `down_limit` bounds. `TopkDropoutStrategy` selects replacements from actual holdings, sells before buying, and leaves retained positions at their existing quantities. Results include portfolio value, positions, trades, orders, and performance metrics. See [strategies and backtesting](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/backtest.html) for execution assumptions and configuration.
 
-### 6. Browse the documentation
+Default buy and sell commissions are **0.01% (0.0001)**, with a **CNY 5 minimum per order**.
+Stamp duty is **0.05% (0.0005), charged on sells only**, in addition to commission.
+These are fixed backtest assumptions, not a historical tax schedule; override them explicitly with `ExchangeConfig`.
+
+### 6. Key-event logging
+
+**Loguru** is included as a core dependency. Logs cover stage starts, completion summaries,
+report paths, and important warnings. Per-stock/per-day progress bars, individual retry details,
+and joblib progress output are disabled. Repeated data warnings within a batch are summarized by category and count.
+Data reads and expression evaluation remain quiet; exceptions still propagate normally.
+
+Qlib does not reconfigure application handlers. For compact output, configure Loguru at your application entry point:
+
+```python
+import sys
+from loguru import logger
+
+logger.remove()  # Application-owned configuration; skip if handlers are already configured
+logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level} | {message}",
+           backtrace=False, diagnose=False)
+```
+
+Use `level="WARNING"` for warnings only. No log file is created automatically.
+See [logging configuration](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/logging.html) for file sinks and script environment variables.
+
+### 7. Browse the documentation
 
 Read online: **[Qlib documentation](https://qlib-joshuaxql.readthedocs.io/)**.
 

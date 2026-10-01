@@ -151,7 +151,7 @@ class LimitDataTest(unittest.TestCase):
         provider = LocalProvider(self.root)  # Default read adjustment is hfq.
         strategy = WeightStrategy(pd.DataFrame({A: [1.0]}, index=self.dates[:1]))
         result = BacktestEngine(provider, initial_cash=10000,
-                                exchange=ExchangeConfig(lot_size=1, buy_cost=0, sell_cost=0, min_cost=0)).run(
+                                exchange=ExchangeConfig(lot_size=1, buy_cost=0, sell_cost=0, min_cost=0, sell_tax=0)).run(
                                     strategy, self.dates[0], self.dates[1])
         self.assertTrue(result.trades.empty)
         self.assertEqual(result.orders.iloc[0].reason, "limit_up")

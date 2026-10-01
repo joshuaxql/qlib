@@ -10,6 +10,8 @@ import struct
 import subprocess
 import sys
 
+from loguru import logger
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -29,7 +31,7 @@ def main():
     if sys.platform != "win32":
         parser.error("Run this MinGW DLL build with Windows Python")
     directory = Path(__file__).resolve().parents[1] / "qlib" / "data" / "_libs"
-    print(f"Compiler: {version}\nTarget: {target}", flush=True)
+    logger.info("原生编译开始：{}，目标={}", version, target)
     for name in ((args.only,) if args.only else ("rolling", "expanding", "pit")):
         output = directory / f"{name}.dll"
         command = [
@@ -37,9 +39,8 @@ def main():
             "-fno-fast-math", "-ffp-contract=off", "-shared", "-static-libgcc",
             str(directory / f"{name}.c"), "-o", str(output), "-lm",
         ]
-        print(subprocess.list2cmdline(command), flush=True)
         subprocess.run(command, check=True)
-        print(f"Built: {output}")
+        logger.info("DLL 构建完成：{}", output)
 
 
 if __name__ == "__main__":

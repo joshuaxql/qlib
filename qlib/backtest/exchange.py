@@ -11,10 +11,10 @@ from qlib.data.ops import integer
 class ExchangeConfig:
     deal_price: str = "open"
     lot_size: int = 100
-    buy_cost: float = 0.0003
-    sell_cost: float = 0.0003
+    buy_cost: float = 0.0001
+    sell_cost: float = 0.0001
     min_cost: float = 5.0
-    sell_tax: float = 0.0
+    sell_tax: float = 0.0005
     slippage: float = 0.0
     limit_threshold: float | None = None
     volume_limit: float | None = None

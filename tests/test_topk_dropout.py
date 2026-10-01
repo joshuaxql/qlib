@@ -36,7 +36,7 @@ class TopkDropoutTest(unittest.TestCase):
         np.asarray([0, *values], dtype="<f4").tofile(self.root / "features" / code / f"{field}.day.bin")
 
     def run_strategy(self, strategy=None, *, end=6, start=0, **exchange):
-        config = dict(lot_size=1, buy_cost=0, sell_cost=0, min_cost=0)
+        config = dict(lot_size=1, buy_cost=0, sell_cost=0, min_cost=0, sell_tax=0)
         config.update(exchange)
         self.provider.clear_cache()
         engine = BacktestEngine(self.provider, initial_cash=10000, exchange=ExchangeConfig(**config))

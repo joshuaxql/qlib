@@ -41,7 +41,8 @@ autocorr = pred_autocorr(pred, lag=1)
 - precision 的股票数检查使用第二层索引，调用时应使用 `(datetime, instrument)` 顺序。
 - ICIR 使用均值 / 样本标准差，不年化；标准差为 0 时可产生 NaN/inf。
 - 自相关是 Pearson，非 Rank 自相关；稀疏日期中 lag 按实际输入日期行计数。
-- 批量函数采用 joblib，n_jobs=1 串行，-1 使用全部可用 CPU。DataFrame 自相关输入取第一列并记录日志。
+- 批量函数采用 joblib，n_jobs=1 串行，-1 使用全部可用 CPU，不打印 joblib 任务进度。
+  DataFrame 自相关输入取第一列；仅在存在额外列被忽略时发出 Loguru 警告。
 
 ## 批量因子分析
 
@@ -60,6 +61,7 @@ result.save("outputs/factor_analysis")
 ```
 
 此模块调用因子评估函数，并提供覆盖率、分位组、换手率与导出功能。
+`factor_analysis()` 仅输出开始和完成摘要，`save()` 输出导出路径，不逐日逐因子刷屏；见[日志配置](logging.md)。
 完整 API 位于 {py:mod}`qlib.contrib.report.analysis_model.analysis_model_performance`。
 
 | 函数 / 类 | 输入与输出 |

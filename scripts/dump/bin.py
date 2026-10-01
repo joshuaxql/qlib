@@ -9,8 +9,9 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from loguru import logger
 
+from qlib.log import log_warning, summarize_warnings
 from scripts import config as C
 from scripts.tushare.data import index_month_ranges
 
@@ -42,7 +43,7 @@ def stock_dir(root, section, code):
 
 def build_stock_basic(client, root):
     frames = []
-    for status in tqdm(("L", "D", "P"), desc="股票基础信息"):
+    for status in ("L", "D", "P"):
         frame = client.fetch(
             "stock_basic", list_status=status,
             fields="ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,"
@@ -100,8 +101,7 @@ def merge_daily(daily, factor, basic, limits):
         values = pd.to_numeric(frame[field], errors="coerce")
         invalid = frame[field].notna() & values.isna()
         if invalid.any():
-            examples = frame.loc[invalid, keys + [field]].head(5).to_dict("records")
-            tqdm.write(f"日线字段 {field} 有 {invalid.sum()} 个非数值，保留 NaN，示例：{examples}")
+            log_warning(f"日线字段 {field} 非数值记录，保留 NaN", int(invalid.sum()))
         frame[field] = values.astype("float64")
     frame["vwap"] = frame.amount * 10 / frame.volume.where(frame.volume > 0)
     return frame[keys + list(DAILY_FIELDS)]
@@ -130,11 +130,13 @@ def write_intervals(path, rows, calendar):
     ))
 
 
+@summarize_warnings()
 def build_daily(client, root, basic, calendar, today):
     """逐日读取 CSV，在磁盘映射数组中对齐后直接输出 .bin。"""
     symbols = pd.Index(sorted(set(basic.ts_code)))
     if calendar.empty or symbols.empty:
         raise ValueError("股票列表或交易日历为空")
+    logger.info("构建日线：{} 只股票，{} 个交易日", len(symbols), len(calendar))
     codes = set(symbols)
     first = np.full(len(symbols), -1, dtype=int)
     last = first.copy()
@@ -146,7 +148,7 @@ def build_daily(client, root, basic, calendar, today):
         matrix = np.memmap(Path(temporary) / "daily.f32", mode="w+", dtype="<f4",
                            shape=(len(calendar), len(symbols), len(DAILY_FIELDS)))
         try:
-            for date_index, date in enumerate(tqdm(calendar, desc="逐日日线 / 复权 / 市值 / ST")):
+            for date_index, date in enumerate(calendar):
                 day = date.strftime("%Y%m%d")
                 daily = client.fetch("daily", trade_date=day)
                 factor = client.fetch("adj_factor", trade_date=day)
@@ -154,7 +156,7 @@ def build_daily(client, root, basic, calendar, today):
                 limits = prepare_limits(client.fetch("stk_limit", trade_date=day), day)
                 if daily.empty:
                     if date == today:
-                        tqdm.write(f"{day} daily 日线尚未发布，历史日历截止上一交易日")
+                        logger.warning("{} daily 日线尚未发布，历史日历截止上一交易日", day)
                         break
                     raise ValueError(f"{day} daily 全市场日线为空，无法构建该交易日行情")
                 daily = daily[daily.ts_code.isin(codes)]
@@ -168,12 +170,11 @@ def build_daily(client, root, basic, calendar, today):
                 }
                 if any(missing.values()):
                     if date == today:
-                        tqdm.write(f"{day} 配套数据未齐，历史日历截止上一交易日")
+                        logger.warning("{} 配套数据未齐，历史日历截止上一交易日", day)
                         break
                     for api, absent in missing.items():
                         if absent:
-                            tqdm.write(f"{day} {api} 缺少 {len(absent)} 只股票记录，"
-                                       f"对应字段保留 NaN，示例：{absent[:10]}")
+                            log_warning(f"日线 {api} 缺少股票日期记录，对应字段保留 NaN", len(absent))
                 frame = merge_daily(daily, factor, market, limits)
                 positions = symbols.get_indexer(frame.ts_code)
                 matrix[date_index] = np.nan  # 停牌等缺失值保留 NaN。
@@ -187,7 +188,7 @@ def build_daily(client, root, basic, calendar, today):
             if not completed:
                 raise ValueError("没有可写入的已发布日线")
             calendar = pd.DatetimeIndex(completed)
-            for position in tqdm(np.flatnonzero(first >= 0), desc="写入 Qlib 日线"):
+            for position in np.flatnonzero(first >= 0):
                 code = symbols[position]
                 left, right = first[position], last[position]
                 directory = stock_dir(root, "features", code)
@@ -199,6 +200,7 @@ def build_daily(client, root, basic, calendar, today):
             del matrix  # 先关闭映射，Windows 才能清理临时数组。
     write_intervals(root / "instruments" / "all.txt", all_rows, calendar)
     write_intervals(root / "instruments" / "st.txt", st_rows, calendar)
+    logger.info("日线暂存完成：{} 只股票，{} 个交易日", len(all_rows), len(calendar))
     return calendar
 
 
@@ -216,11 +218,12 @@ def snapshot_intervals(snapshots, calendar):
 
 
 def build_indices(client, root, codes, calendar):
+    logger.info("构建历史指数成分：{} 个指数", len(C.INDEX_CODES))
     # 没有更早快照时不倒填首个快照。
     for name, index_code in C.INDEX_CODES.items():
         snapshots = {}
         ranges = index_month_ranges(index_code, calendar[-1])
-        for start, end in tqdm(ranges, desc=f"{name} 月度成分"):
+        for start, end in ranges:
             frame = client.fetch("index_weight", index_code=index_code,
                                  start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"))
             if frame.empty:
@@ -240,7 +243,9 @@ def build_industry(client, root, basic, calendar):
     if classifications.empty:
         raise ValueError("申万一级行业列表为空")
     stocks = basic.set_index("ts_code")
-    for industry in tqdm(sorted(set(classifications.index_code)), desc="申万一级行业历史成分"):
+    industries = sorted(set(classifications.index_code))
+    logger.info("构建历史行业成分：{} 个行业", len(industries))
+    for industry in industries:
         rows = []
         for status in ("N", "Y"):
             frame = client.fetch("index_member_all", l1_code=industry, is_new=status)

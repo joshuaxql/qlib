@@ -4,6 +4,7 @@ import math
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 from .exchange import ExchangeConfig
 from .report import BacktestResult
@@ -29,6 +30,8 @@ class BacktestEngine:
         dates = provider.calendar(start_time, end_time)
         if dates.empty:
             raise ValueError("Backtest range contains no historical trading days")
+        logger.info("回测开始：{} 至 {}，{} 个交易日，初始资金={:.2f}",
+                    dates[0].date(), dates[-1].date(), len(dates), self.initial_cash)
         calendar = provider.calendar(end_time=end_time)
         first = calendar.get_loc(dates[0])
         signal_start = calendar[max(0, first - 1)]
@@ -245,10 +248,14 @@ class BacktestEngine:
             report["excess_return"] = report["return"] - benchmark
             metrics["benchmark_total_return"] = report.benchmark_net_value.iloc[-1] - 1
             metrics["excess_total_return"] = metrics.total_return - metrics.benchmark_total_return
-        return BacktestResult(
+        result = BacktestResult(
             report,
             pd.DataFrame(positions, columns=["datetime", "instrument", "quantity", "price", "market_value"]).set_index(["datetime", "instrument"]),
             pd.DataFrame(trades, columns=["datetime", "signal_date", "instrument", "side", "quantity", "price", "notional", "cost"]),
             pd.DataFrame(orders, columns=["datetime", "signal_date", "instrument", "side", "requested", "filled", "status", "reason"]),
             metrics,
         )
+        logger.info("回测完成：期末权益={:.2f}，总收益={:.2%}，总费用={:.2f}，成交/结算={} 笔，拒绝={}，部分成交={}",
+                    report.equity.iloc[-1], metrics.total_return, metrics.total_cost, len(result.trades),
+                    int(result.orders.status.eq("rejected").sum()), int(result.orders.status.eq("partial").sum()))
+        return result

@@ -12,6 +12,7 @@ from numbers import Real
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 from qlib.data import D
 from qlib.contrib.eva.alpha import calc_ic, calc_long_short_return, pred_autocorr
@@ -345,6 +346,7 @@ class FactorAnalysisResult:
                      "quantile_membership", "turnover", "autocorrelation"):
             getattr(self, name).to_csv(directory / f"{name}.csv")
         (directory / "config.json").write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("因子分析报告已保存：{}", directory)
 
 
 def analyze_factors(factors, forward_returns, *, quantiles=5, min_samples=2, turnover_lag=1):
@@ -454,6 +456,7 @@ def factor_analysis(instruments, factors, start_time=None, end_time=None, *, pro
     (Z-score). All are on by default, with std clipping at n=3; see preprocess_factors.
     """
     processing = _preprocessing_config(winsorize, winsorize_n, mad_scale, neutralize, standardize, ddof)
+    logger.info("因子分析开始：计算因子、预处理及收益标签")
     values = calculate_factors(instruments, factors, start_time, end_time, provider=provider, adjust=adjust)
     values = preprocess_factors(values, provider=provider, winsorize=winsorize, winsorize_n=winsorize_n,
                                 mad_scale=mad_scale, neutralize=neutralize, market_cap=market_cap,
@@ -466,4 +469,6 @@ def factor_analysis(instruments, factors, start_time=None, end_time=None, *, pro
     result.config["neutralization"] = ({"method": "industry_log_market_cap", "market_cap": market_cap,
                                         "min_samples": int(neutralize_min_samples)} if neutralize else None)
     result.config["preprocessing"] = processing
+    logger.info("因子分析完成：{} 个因子，{} 个持有期，{} 条股票日期记录",
+                len(result.factors.columns), len(result.forward_returns.columns), len(result.factors))
     return result

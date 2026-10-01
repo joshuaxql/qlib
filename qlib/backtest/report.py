@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+from loguru import logger
 
 
 @dataclass
@@ -19,3 +20,4 @@ class BacktestResult:
         directory.mkdir(parents=True, exist_ok=True)
         for name in ("report", "positions", "trades", "orders", "metrics"):
             getattr(self, name).to_csv(directory / f"{name}.csv", encoding="utf-8-sig")
+        logger.info("回测报告已保存：{}", directory)

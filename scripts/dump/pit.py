@@ -4,9 +4,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from loguru import logger
 
 from qlib.data.pit import register_fields, write_stock
+from qlib.log import log_warning, summarize_warnings
 from scripts import config as C
 from scripts.tushare.data import FINANCIAL_META, financial_fields
 
@@ -35,8 +36,7 @@ def prepare_financial(frame, table, fields, codes, today):
         raise ValueError(f"{table} 缺少有效公告日或自然季度报告期")
     premature = published < end
     if premature.any():
-        examples = frame.loc[premature, ["ts_code", "ann_date", "end_date"]].head(5).to_dict("records")
-        tqdm.write(f"{table} 跳过 {int(premature.sum())} 条公告日早于报告期末的记录：{examples}")
+        log_warning(f"{table} 跳过公告日早于报告期末的记录", int(premature.sum()))
         frame = frame.loc[~premature].copy()
         published, end = published.loc[frame.index], end.loc[frame.index]
     if frame.empty:
@@ -58,6 +58,7 @@ def prepare_financial(frame, table, fields, codes, today):
     return long.rename(columns={"ts_code": "instrument"})[columns]
 
 
+@summarize_warnings()
 def build_financial(client, root, codes, today, selection=None):
     """Read quarterly CSVs as wide tables in memory, then write each stock directly.
 
@@ -79,9 +80,10 @@ def build_financial(client, root, codes, today, selection=None):
     quarters = [quarter for quarter in pd.period_range(C.START_DATE, today, freq="Q")
                 if quarter.end_time.normalize() <= today]
     for table, fields in selection.items():
+        logger.info("构建 PIT：{}，{} 个季度，{} 个指标", table, len(quarters), len(fields))
         frames = []
         required = [*FINANCIAL_META, *fields]
-        for quarter in tqdm(quarters, desc=f"读取 {table} 财务 CSV"):
+        for quarter in quarters:
             frame = client.fetch(f"{table}_vip", period=quarter.end_time.strftime("%Y%m%d"),
                                  fields=",".join(required))
             if frame.empty:
@@ -92,11 +94,16 @@ def build_financial(client, root, codes, today, selection=None):
             if not frame.empty:
                 frames.append(frame)
         if not frames:
+            logger.warning("{} 没有可构建的财务记录", table)
             continue
         combined = pd.concat(frames, ignore_index=True)
         del frames
         groups = combined.groupby("ts_code", sort=True)
-        for code, frame in tqdm(groups, total=groups.ngroups, desc="CSV 写入合并 PIT / 每股两文件"):
+        stocks, records = 0, 0
+        for code, frame in groups:
             rows = prepare_financial(frame, table, fields, {code}, today)
             if not rows.empty:
                 write_stock(financial, code, rows.drop(columns="instrument"), update=False)
+                stocks += 1
+                records += len(rows)
+        logger.info("PIT 暂存完成：{}，{} 只股票，{} 条指标版本记录", table, stocks, records)

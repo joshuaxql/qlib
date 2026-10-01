@@ -8,6 +8,7 @@ from time import perf_counter
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -68,11 +69,10 @@ def main():
         reference_time = perf_counter() - start
         np.testing.assert_allclose(result.loc[codes[0], expressions[1]], expected, equal_nan=True)
         files = sum(path.is_file() for path in (root / "financial").rglob("*"))
-        print(f"stocks={args.stocks}, fields={args.fields}, records={len(rows) * args.stocks}, trading_days={len(dates)}")
-        print(f"final_files={files} (2 per stock + 1 dictionary), build={build:.3f}s")
-        print(f"event_query_all_stocks_3_expressions: cold={cold:.3f}s, warm={warm_time:.3f}s")
-        print(f"daily_dataframe_oracle_1_stock_1_expression={reference_time:.3f}s")
-        print("Event results match the independent daily oracle.")
+        logger.info("PIT 基准核对通过：stocks={}，fields={}，records={}，trading_days={}，files={}",
+                    args.stocks, args.fields, len(rows) * args.stocks, len(dates), files)
+        logger.info("耗时：build={:.3f}s，cold={:.3f}s，warm={:.3f}s，daily_oracle={:.3f}s",
+                    build, cold, warm_time, reference_time)
 
 
 if __name__ == "__main__":

@@ -9,12 +9,13 @@ import time
 from pathlib import Path
 
 import pandas as pd
-from tqdm import tqdm
+from loguru import logger
 
 # 兼容直接运行本文件及 python -m scripts.build_data。
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from qlib.log import summarize_warnings
 from scripts import config as C
 from scripts.dump.bin import (
     DAILY_FIELDS,
@@ -37,6 +38,7 @@ def _save_state(path, state):
     temporary.replace(path)
 
 
+@summarize_warnings()
 def build_data(download=True, resume_dir=None):
     output = Path(C.OUTPUT_DIR).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -77,13 +79,13 @@ def build_data(download=True, resume_dir=None):
         _save_state(state_path, state)
     today = pd.Timestamp(state["today"])
     client = CsvClient(cache_dir)
+    logger.info("数据构建开始：{}，截止日={}，断点目录={}", output, iso_date(today), work)
     if download and not state["cache_ready"]:
         client = download_data(cache_dir, today)
     else:
-        tqdm.write(f"离线构建：{cache_dir} -> {output}；截止日：{iso_date(today)}")
+        logger.info("复用本地 CSV 缓存：{}", cache_dir)
     state["cache_ready"] = True
     _save_state(state_path, state)
-    tqdm.write(f"构建断点：{work}")
 
     root = work / "cn_data"
     root.mkdir(exist_ok=True)
@@ -101,7 +103,7 @@ def build_data(download=True, resume_dir=None):
         calendar = pd.DatetimeIndex(
             pd.read_csv(root / "calendars/day.txt", header=None)[0]
         )
-        tqdm.write(f"复用已完成日线：{len(calendar)} 个交易日")
+        logger.info("复用已完成日线：{} 个交易日", len(calendar))
     codes = set(basic.ts_code)
     build_indices(client, root, codes, calendar)
     build_industry(client, root, basic, calendar)
@@ -127,7 +129,7 @@ def build_data(download=True, resume_dir=None):
     if backup is not None:
         shutil.rmtree(backup)
     shutil.rmtree(work)  # 仅清理本次工作目录；CSV 缓存始终保留。
-    tqdm.write(f"构建完成：{output}，日线截止 {iso_date(calendar[-1])}")
+    logger.info("数据构建完成：{}，日线截止 {}", output, iso_date(calendar[-1]))
 
 
 if __name__ == "__main__":

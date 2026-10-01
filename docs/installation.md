@@ -3,8 +3,8 @@
 ## 环境要求
 
 - Python **3.10 或更新版本**；文档构建推荐 Python **3.12**。
-- 核心依赖：NumPy、pandas、SciPy、joblib。
-- 下载数据：额外安装 Tushare、tqdm，并配置账户 Token。
+- 核心依赖：NumPy、pandas、SciPy、joblib、Loguru。
+- 下载数据：额外安装 Tushare，并配置账户 Token。
 - 原生 DLL：Windows、与 Python 位数匹配的 MinGW-w64 GCC。
 
 PyPI 发行包名为 **`qlib-joshuaxql`**，Python 导入名为 **`qlib`**，建议使用独立虚拟环境安装。
@@ -33,7 +33,8 @@ python -m pip install --upgrade qlib-joshuaxql
 python -m pip install "qlib-joshuaxql[download,docs]"
 ```
 
-`download` 安装 Tushare、tqdm；`docs` 安装文档构建依赖。
+`download` 安装 Tushare；`docs` 安装文档构建依赖。
+Loguru 随核心包自动安装；日志仅保留关键事件，不再依赖 tqdm 进度条，配置见[日志](logging.md)。
 wheel 提供 `qlib` 库与 C 源文件；运行本页及其他指南中的 `scripts/`、`tests/`、`docs/` 命令，
 请使用 Git 仓库或 PyPI 源码压缩包的根目录。
 

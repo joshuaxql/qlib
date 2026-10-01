@@ -6,6 +6,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 import qlib
 from qlib.data import D, LocalProvider
@@ -60,7 +61,7 @@ class ResearchTest(unittest.TestCase):
         return WeightStrategy(pd.DataFrame(rows).T.rename_axis("datetime"))
 
     def engine(self, **kwargs):
-        defaults = dict(lot_size=100, buy_cost=0, sell_cost=0, min_cost=0)
+        defaults = dict(lot_size=100, buy_cost=0, sell_cost=0, min_cost=0, sell_tax=0)
         defaults.update(kwargs)
         return BacktestEngine(self.provider, initial_cash=10000, exchange=ExchangeConfig(**defaults))
 
@@ -182,10 +183,45 @@ class ResearchTest(unittest.TestCase):
         for mode in ("hfq", "qfq", "none"):
             provider = LocalProvider(self.root, adjust=mode)
             engine = BacktestEngine(provider, initial_cash=10000,
-                                    exchange=ExchangeConfig(lot_size=100, buy_cost=0, sell_cost=0, min_cost=0))
+                                    exchange=ExchangeConfig(lot_size=100, buy_cost=0, sell_cost=0, min_cost=0, sell_tax=0))
             actual = engine.run(strategy, "2024-01-02", "2024-01-11")
             pd.testing.assert_frame_equal(actual.report, expected.report)
             pd.testing.assert_frame_equal(actual.trades, expected.trades)
+
+    def test_default_fee_schedule_and_explicit_overrides(self):
+        config = ExchangeConfig()
+        self.assertEqual((config.buy_cost, config.sell_cost, config.sell_tax, config.min_cost),
+                         (0.0001, 0.0001, 0.0005, 5.0))
+        for notional, buy, sell in ((0, 0, 0), (10000, 5, 10), (100000, 10, 60)):
+            self.assertAlmostEqual(config.fee("buy", notional), buy)
+            self.assertAlmostEqual(config.fee("sell", notional), sell)
+        tax_only = ExchangeConfig(buy_cost=0, sell_cost=0, min_cost=0)
+        self.assertEqual(tax_only.fee("buy", 10000), 0)
+        self.assertEqual(tax_only.fee("sell", 10000), 5)
+        free = ExchangeConfig(buy_cost=0, sell_cost=0, min_cost=0, sell_tax=0)
+        self.assertEqual(free.fee("sell", 10000), 0)
+        custom = ExchangeConfig(buy_cost=0.002, sell_cost=0.003, sell_tax=0.001, min_cost=2)
+        self.assertEqual(custom.fee("buy", 10000), 20)
+        self.assertEqual(custom.fee("sell", 10000), 40)
+
+    def test_default_fees_reach_execution_and_summary_logs(self):
+        messages = []
+        handler = logger.add(messages.append, filter="qlib.backtest.executor")
+        self.addCleanup(logger.remove, handler)
+        strategy = self.weights({"2024-01-02": {A: 1}, "2024-01-03": {A: 0}})
+        for exchange in (None, {}, ExchangeConfig()):
+            messages.clear()
+            result = BacktestEngine(self.provider, initial_cash=10000, exchange=exchange).run(
+                strategy, "2024-01-02", "2024-01-04")
+            self.assertEqual(result.trades.quantity.tolist(), [900, 900])
+            np.testing.assert_allclose(result.trades.cost, [5, 10.4])
+            self.assertAlmostEqual(result.metrics.total_cost, 15.4)
+            self.assertAlmostEqual(result.report.iloc[-1].cash, 10884.6)
+            self.assertAlmostEqual(result.report.iloc[-1].equity, 10884.6)
+            self.assertTrue(result.report.cash.ge(0).all())
+            self.assertEqual(len(messages), 2)  # Start/end only, not daily or per-order logs.
+            self.assertTrue(all(m.record["level"].name == "INFO" for m in messages))
+            self.assertIn("回测完成", messages[-1].record["message"])
 
     def test_commission_minimum_sell_tax_and_cash_conservation(self):
         strategy = self.weights({"2024-01-02": {A: 1}, "2024-01-03": {A: 0}})

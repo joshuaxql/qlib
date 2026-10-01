@@ -25,6 +25,7 @@ Qlib 文档
    pit
    factor
    backtest
+   logging
    structure
 
 .. toctree::

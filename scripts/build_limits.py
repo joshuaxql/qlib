@@ -7,16 +7,18 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from loguru import logger
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from qlib.log import log_warning, summarize_warnings
 from scripts import config as C
 from scripts.dump.bin import prepare_limits
 from scripts.tushare.data import CsvClient, TushareClient, download_limit_cache
 
 
+@summarize_warnings()
 def build_limits(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, download=False):
     """Stage both fields, align to existing daily spans, then atomically replace each file.
 
@@ -45,6 +47,7 @@ def build_limits(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, download=F
         spans[code] = (left, right)
     if not spans:
         raise ValueError("没有可补充涨跌停价格的日线股票")
+    logger.info("涨跌停价格构建开始：{}，{} 只股票，{} 个交易日，下载={}", root, len(spans), len(calendar), download)
     if download:
         if not C.TOKEN.strip():
             raise ValueError("请设置 TUSHARE_TOKEN")
@@ -59,7 +62,7 @@ def build_limits(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, download=F
         stage = Path(temporary)
         matrix = np.memmap(stage / "limits.f32", mode="w+", dtype="<f4", shape=(len(calendar), len(symbols), 2))
         try:
-            for position, date in enumerate(tqdm(calendar, desc="对齐每日涨跌停价格")):
+            for position, date in enumerate(calendar):
                 day = date.strftime("%Y%m%d")
                 daily = reader.fetch("daily", trade_date=day, fields="ts_code,trade_date")
                 daily = daily[daily.ts_code.isin(symbols)]
@@ -72,7 +75,7 @@ def build_limits(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, download=F
                 matrix[position, symbols.get_indexer(merged.ts_code)] = values
                 total += len(merged)
                 covered += int(np.isfinite(values).all(axis=1).sum())
-            for column, code in enumerate(tqdm(symbols, desc="暂存涨跌停二进制文件")):
+            for column, code in enumerate(symbols):
                 left, right = spans[code]
                 directory = stage / code
                 directory.mkdir()
@@ -85,7 +88,9 @@ def build_limits(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, download=F
                 (stage / code / f"{field}.day.bin").replace(root / "features" / code / f"{field}.day.bin")
     result = {"stocks": len(symbols), "trading_days": len(calendar), "daily_rows": total,
               "rows_with_both_limits": covered, "rows_missing_limits": total - covered}
-    print(f"涨跌停价格构建完成：{root}，{result}")
+    if total > covered:
+        log_warning("涨跌停价格缺少完整双侧边界的股票日期记录，缺失方向保留 NaN", total - covered)
+    logger.info("涨跌停价格构建完成：{}，{} 只股票，完整边界={}/{} 条记录", root, len(symbols), covered, total)
     return result
 
 

@@ -3,6 +3,7 @@
 ```text
 qlib/
 ├─ __init__.py                         # init()
+├─ log.py                              # Loguru 批量警告汇总，不配置全局处理器
 ├─ data/
 │  ├─ __init__.py                     # D、LocalProvider 导出
 │  ├─ data.py                         # 本地数据提供器、D 实例

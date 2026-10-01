@@ -89,6 +89,8 @@ result.save("outputs/backtest")
 {py:func}`qlib.backtest.backtest.backtest` 返回 `BacktestResult`；provider=None 使用 D。
 也可创建 {py:class}`qlib.backtest.executor.BacktestEngine` 后调用 `run()`，构造参数 periods_per_year 控制年化，默认 252。
 benchmark 可传覆盖回测日期的日收益 Series，用于基准与超额收益报告。
+回测通过 Loguru 仅记录开始及完成摘要（权益、收益、费用、成交/结算数、拒绝/部分成交数）；
+逐日账户和逐笔订单详情保留在结果表中，不逐条打印。配置方式见[日志](logging.md)。
 
 ## 交易配置
 
@@ -98,9 +100,9 @@ benchmark 可传覆盖回测日期的日收益 Series，用于基准与超额收
 |---|---:|---|
 | deal_price | open | open/close/vwap |
 | lot_size | 100 | 每手股数 |
-| buy_cost / sell_cost | 0.0003 | 买入/卖出佣金率 |
-| min_cost | 5.0 | 最低佣金 |
-| sell_tax | 0.0 | 卖出税率 |
+| buy_cost / sell_cost | 0.0001 | 买入/卖出佣金率，均为万分之一 |
+| min_cost | 5.0 | 每笔最低佣金，元 |
+| sell_tax | 0.0005 | 印花税，万分之五，仅卖出收取 |
 | slippage | 0.0 | 成交价偏移比例 |
 | limit_threshold | None | 可选统一涨跌幅边界 |
 | volume_limit | None | 可选当日成交量占比限制 |
@@ -109,6 +111,23 @@ benchmark 可传覆盖回测日期的日收益 Series，用于基准与超额收
 | delist_policy | raise | raise 或 last_close |
 
 `fee(side,notional)` 计算费用；`block_reason(side,bar,previous_close)` 返回拒绝成交原因或 None。
+对正成交金额，默认费用为：
+
+```text
+买入费用 = max(5, 成交金额 × 0.0001)
+卖出费用 = max(5, 成交金额 × 0.0001) + 成交金额 × 0.0005
+```
+
+印花税不参与最低佣金的比较，也不向买入收取。成交金额为 10,000 元时，买入费用为 5 元、
+卖出费用为 10 元；成交金额为 100,000 元时，分别为 10 元和 60 元。无成交不收费。
+`min_cost` 仍默认 5 元；费率是整个回测区间的固定假设，不自动匹配历史政策，可显式覆盖。
+
+```python
+# 完全不计佣金和印花税时，四项都必须关闭
+no_fees = ExchangeConfig(buy_cost=0, sell_cost=0, min_cost=0, sell_tax=0)
+```
+
+只关闭佣金不会关闭默认印花税。退市 `last_close` 结算仍不收费用或印花税。
 
 ## 执行规则
 

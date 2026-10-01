@@ -12,8 +12,9 @@ import time
 from pathlib import Path
 
 import pandas as pd
-from tqdm import tqdm
+from loguru import logger
 
+from qlib.log import log_warning, summarize_warnings
 from scripts import config as C
 from scripts.tushare.fields import FINA_INDICATOR_FIELDS
 
@@ -29,6 +30,7 @@ class TushareClient:
         self.last_request = 0.0
 
     def _request_page(self, api, offset, params):
+        errors = 0
         for attempt in range(C.RETRIES + 1):
             time.sleep(max(0, C.REQUEST_INTERVAL - (time.monotonic() - self.last_request)))
             self.last_request = time.monotonic()
@@ -38,16 +40,14 @@ class TushareClient:
                     raise TypeError(f"{api} 未返回 DataFrame")
             except Exception as exc:
                 if attempt == C.RETRIES:
-                    raise RuntimeError(f"{api} 请求失败，参数={params}, offset={offset}") from exc
-                reason = f"请求失败：{exc}"
+                    raise RuntimeError(f"{api} 请求失败，offset={offset}，已重试 {C.RETRIES} 次") from exc
+                errors += 1
             else:
-                if not page.empty:
+                if not page.empty or attempt == C.RETRIES:
+                    if errors:
+                        log_warning(f"Tushare {api} 请求异常后已恢复，异常重试次数", errors)
+                    # Empty ST/financial responses and pagination tails are normal.
                     return page
-                if attempt == C.RETRIES:
-                    tqdm.write(f"{api} 参数={params}, offset={offset} 重试 {C.RETRIES} 次后仍为空")
-                    return page
-                reason = "返回为空"
-            tqdm.write(f"{api} 参数={params}, offset={offset} {reason}，第 {attempt + 1}/{C.RETRIES} 次重试")
             time.sleep(3 * (attempt + 1))
 
     def fetch(self, api, **params):
@@ -127,7 +127,7 @@ def cache_csv(path, load, refresh=False):
         if column in frame:
             frame = frame[frame[column].astype("string").str.fullmatch(r"\d{6}\.(SH|SZ)", na=False)]
     if frame.empty and not existing.empty:
-        tqdm.write(f"{path.name} 刷新为空，保留已有非空缓存")
+        log_warning("CSV 刷新为空，保留已有非空缓存文件")
         return existing
     if not len(frame.columns):
         frame = pd.DataFrame(columns=["ts_code"])
@@ -188,7 +188,7 @@ def fetch_calendar(client, today):
     dates = set()
     tasks = [(exchange, year) for exchange in ("SSE", "SZSE")
              for year in range(pd.Timestamp(C.START_DATE).year, target.year + 1)]
-    for exchange, year in tqdm(tasks, desc="交易日历"):
+    for exchange, year in tasks:
         frame = client.fetch("trade_cal", exchange=exchange, is_open="1",
                              start_date=max(C.START_DATE, f"{year}0101"),
                              end_date=min(target.strftime("%Y%m%d"), f"{year}1231"))
@@ -202,10 +202,12 @@ def fetch_calendar(client, today):
     return history, future
 
 
+@summarize_warnings()
 def download_cache(client, directory, today):
     """先完成所有下载，任何后续构建失败都不会删除这里的文件。"""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    logger.info("CSV 下载开始：{}，截止日={:%Y-%m-%d}", directory, today)
 
     def snapshot(name, load):
         path = directory / name
@@ -216,7 +218,7 @@ def download_cache(client, directory, today):
         client.fetch("stock_basic", list_status=status,
                      fields="ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,"
                             "exchange,curr_type,list_status,list_date,delist_date,is_hs")
-        for status in tqdm(("L", "D", "P"), desc="下载股票基础信息")
+        for status in ("L", "D", "P")
     ], ignore_index=True))
 
     def calendar_rows():
@@ -224,7 +226,7 @@ def download_cache(client, directory, today):
         tasks = [(exchange, year) for exchange in ("SSE", "SZSE")
                  for year in range(pd.Timestamp(C.START_DATE).year, target.year + 1)]
         frames = []
-        for exchange, year in tqdm(tasks, desc="下载交易日历"):
+        for exchange, year in tasks:
             frame = client.fetch("trade_cal", exchange=exchange, is_open="1",
                                  start_date=max(C.START_DATE, f"{year}0101"),
                                  end_date=min(target.strftime("%Y%m%d"), f"{year}1231"))
@@ -234,7 +236,8 @@ def download_cache(client, directory, today):
     snapshot("trade_cal.csv", calendar_rows)
     reader = CsvClient(directory)
     calendar, _ = fetch_calendar(reader, today)
-    for date in tqdm(calendar, desc="下载每日 CSV / 断点复用"):
+    logger.info("下载日线及配套 CSV：{} 个交易日，复用历史缓存", len(calendar))
+    for date in calendar:
         day = date.strftime("%Y%m%d")
         for api in ("daily", "adj_factor", "daily_basic", "stock_st"):
             path = directory / api / f"{day}.csv"
@@ -246,8 +249,9 @@ def download_cache(client, directory, today):
 
     download_limit_cache(client, directory, calendar, today)
 
-    for name, index_code in C.INDEX_CODES.items():
-        for start, end in tqdm(index_month_ranges(index_code, today), desc=f"下载 {name} 月度 CSV"):
+    logger.info("下载历史指数成分：{} 个指数", len(C.INDEX_CODES))
+    for index_code in C.INDEX_CODES.values():
+        for start, end in index_month_ranges(index_code, today):
             month = start.to_period("M")
             path = directory / "index_weight" / index_code / f"{month.strftime('%Y%m')}.csv"
             cache_csv(path, lambda: client.fetch(
@@ -262,23 +266,26 @@ def download_cache(client, directory, today):
         if classes.empty:
             raise ValueError("申万一级行业列表为空")
         frames = []
-        for code in tqdm(sorted(set(classes.index_code)), desc="下载行业 CSV"):
+        for code in sorted(set(classes.index_code)):
             for status in ("N", "Y"):
                 frame = client.fetch("index_member_all", l1_code=code, is_new=status)
                 frames.append(frame.assign(l1_code=code, is_new=status))
         return pd.concat(frames, ignore_index=True).drop_duplicates()
 
+    logger.info("下载历史行业成分")
     snapshot("industry.csv", industry_rows)
     if C.BUILD_PIT:
         download_financial_cache(client, directory, today)
-    tqdm.write(f"CSV 下载完成，缓存永久保留：{directory}")
+    logger.info("CSV 下载完成，缓存永久保留：{}", directory)
     return reader
 
 
+@summarize_warnings()
 def download_limit_cache(client, directory, calendar, today):
     """Cache paginated stk_limit responses by trade date, refreshing today's file."""
     directory = Path(directory)
-    for date in tqdm(calendar, desc="下载每日涨跌停价格"):
+    logger.info("下载涨跌停 CSV：{} 个交易日", len(calendar))
+    for date in calendar:
         day = date.strftime("%Y%m%d")
         path = directory / "stk_limit" / f"{day}.csv"
 
@@ -293,15 +300,18 @@ def download_limit_cache(client, directory, calendar, today):
             return frame[list(LIMIT_FIELDS)]
 
         cache_csv(path, load, refresh=date == today or (path.exists() and cache_day(path) <= date))
+    logger.info("涨跌停 CSV 缓存就绪：{}", directory / "stk_limit")
 
 
+@summarize_warnings()
 def download_financial_cache(client, directory, today, selection=None):
     """Fetch selected quarterly fields, retaining previously received versions."""
     quarters = [quarter for quarter in pd.period_range(C.START_DATE, today, freq="Q")
                 if quarter.end_time.normalize() <= today]
     for table, fields in financial_fields(selection).items():
+        logger.info("下载财务 CSV：{}，{} 个季度，{} 个指标", table, len(quarters), len(fields))
         required = [*FINANCIAL_META, *fields]
-        for position, quarter in enumerate(tqdm(quarters, desc=f"下载 {table} PIT CSV")):
+        for position, quarter in enumerate(quarters):
             period = quarter.end_time.strftime("%Y%m%d")
             path = financial_cache_path(directory, table, period)
             existing = read_csv(path) if path.exists() else pd.DataFrame()
@@ -312,7 +322,7 @@ def download_financial_cache(client, directory, today, selection=None):
             incoming = client.fetch(f"{table}_vip", period=period, fields=",".join(required))
             if incoming.empty:
                 if not existing.empty:
-                    tqdm.write(f"{table} {period} 刷新为空，保留历史版本")
+                    log_warning(f"{table} 刷新为空，保留历史版本的季度缓存文件")
                     continue
                 incoming = pd.DataFrame(columns=required)
             elif not set(required).issubset(incoming.columns):
@@ -326,6 +336,7 @@ def download_financial_cache(client, directory, today, selection=None):
                     incoming[key] = incoming[key].astype("string")
                 incoming = incoming.drop_duplicates(keys, keep="last")
             cache_csv(path, lambda frame=incoming: frame, refresh=True)
+        logger.info("财务 CSV 缓存就绪：{}", table)
 
 
 def download_data(directory, today):
@@ -334,5 +345,4 @@ def download_data(directory, today):
         raise ValueError("请设置 TUSHARE_TOKEN 环境变量，或填写 scripts/config.py 的 TOKEN")
     import tushare as ts
 
-    tqdm.write(f"CSV 缓存：{directory}；本次构建截止日：{today:%Y-%m-%d}")
     return download_cache(TushareClient(ts.pro_api(C.TOKEN)), directory, today)

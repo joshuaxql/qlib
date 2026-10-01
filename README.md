@@ -199,7 +199,7 @@ result = backtest(
     provider=provider, initial_cash=1_000_000,
     exchange=ExchangeConfig(
         deal_price="open", lot_size=100,
-        buy_cost=0.0003, sell_cost=0.0003, min_cost=5,
+        buy_cost=0.0001, sell_cost=0.0001, sell_tax=0.0005, min_cost=5,
     ),
 )
 print(result.metrics)
@@ -208,7 +208,31 @@ result.save("outputs/backtest")
 
 信号在下一交易日执行，撮合使用原始价格，并自动读取 `up_limit` / `down_limit` 边界。`TopkDropoutStrategy` 根据实际持仓换出股票，先卖后买，保留股票不重新调权。结果包含净值、持仓、成交、订单和绩效指标。执行假设与配置见[策略与回测](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/backtest.html)。
 
-### 6. 浏览文档
+默认买卖佣金均为 **万分之一（0.0001）**，每笔最低佣金仍为 **5 元**；
+印花税为 **万分之五（0.0005），仅卖出收取**，在卖出佣金之外另计。
+这些是固定回测参数，不自动按历史政策切换；可通过 `ExchangeConfig` 显式覆盖。
+
+### 6. 关键日志
+
+日志统一使用 **Loguru**（安装时自动包含），仅记录阶段开始、完成摘要、报告路径和重要警告。
+不输出逐股/逐日进度条、逐次重试详情或 joblib 任务进度；批量构建中的重复数据警告按类别汇总数量。
+数据读取与表达式求值保持安静，异常仍正常抛出，不会被日志吞掉。
+
+Qlib 不修改调用方的日志处理器。可在应用入口配置简洁输出：
+
+```python
+import sys
+from loguru import logger
+
+logger.remove()  # 由应用主动替换默认处理器；已有日志配置时无需重复设置
+logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level} | {message}",
+           backtrace=False, diagnose=False)
+```
+
+只看警告可将 `level` 改为 `"WARNING"`。日志默认不写文件；文件输出及脚本环境变量设置见
+[日志配置](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/logging.html)。
+
+### 7. 浏览文档
 
 在线阅读：**[Qlib 文档](https://qlib-joshuaxql.readthedocs.io/)**。
 

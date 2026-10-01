@@ -6,11 +6,11 @@ Scalar evaluators use pandas correlation, selection and grouping operations.
 Batch evaluation uses joblib workers and returns dictionaries of result Series.
 """
 
-import logging
 from typing import Tuple
 
 import pandas as pd
 from joblib import Parallel, delayed
+from loguru import logger
 
 
 def calc_long_short_prec(
@@ -83,7 +83,8 @@ def pred_autocorr(pred: pd.Series, lag=1, inst_col="instrument", date_col="datet
     A DataFrame uses its first column. date_col does not alter this calculation.
     """
     if isinstance(pred, pd.DataFrame):
-        logging.getLogger("pred_autocorr").warning("Only the first column in %s of `pred` is kept", pred.columns)
+        if len(pred.columns) > 1:
+            logger.warning("pred_autocorr uses only the first column; {} extra columns ignored", len(pred.columns) - 1)
         pred = pred.iloc[:, 0]
     pred_ustk = pred.sort_index().unstack(inst_col)
     corr_s = {}
@@ -95,7 +96,7 @@ def pred_autocorr(pred: pd.Series, lag=1, inst_col="instrument", date_col="datet
 def pred_autocorr_all(pred_dict, n_jobs=-1, **kwargs):
     """Return {method: autocorrelation Series}; n_jobs follows joblib."""
     keys = list(pred_dict)
-    results = Parallel(n_jobs=n_jobs, verbose=10)(delayed(pred_autocorr)(pred_dict[key], **kwargs) for key in keys)
+    results = Parallel(n_jobs=n_jobs, verbose=0)(delayed(pred_autocorr)(pred_dict[key], **kwargs) for key in keys)
     return dict(zip(keys, results))
 
 
@@ -117,7 +118,7 @@ def calc_ic(pred: pd.Series, label: pd.Series, date_col="datetime", dropna=False
 def calc_all_ic(pred_dict_all, label, date_col="datetime", dropna=False, n_jobs=-1):
     """Return {method: {'ic': Series, 'ric': Series}} using joblib workers."""
     keys = list(pred_dict_all)
-    results = Parallel(n_jobs=n_jobs, verbose=10)(
+    results = Parallel(n_jobs=n_jobs, verbose=0)(
         delayed(calc_ic)(pred_dict_all[key], label, date_col=date_col, dropna=dropna) for key in keys
     )
     return {key: {"ic": ic, "ric": ric} for key, (ic, ric) in zip(keys, results)}

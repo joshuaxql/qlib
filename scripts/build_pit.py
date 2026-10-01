@@ -8,19 +8,23 @@ from tempfile import TemporaryDirectory
 import time
 
 import pandas as pd
+from loguru import logger
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from qlib.log import summarize_warnings
 from scripts import config as C
 from scripts.dump.pit import build_financial
 from scripts.tushare.data import CsvClient, TushareClient, download_financial_cache
 
 
+@summarize_warnings()
 def build_pit(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, today=None, download=False):
     root, cache = Path(provider_uri).expanduser().resolve(), Path(cache_uri).expanduser().resolve()
     today = pd.Timestamp(today) if today is not None else pd.Timestamp.now(tz="Asia/Shanghai").tz_localize(None).normalize()
     codes = set(pd.read_csv(root / "stock_basic.csv", dtype={"ts_code": str}).ts_code)
+    logger.info("PIT 构建开始：{}，截止日={:%Y-%m-%d}，下载={}", root, today, download)
     if download:
         if not C.TOKEN.strip():
             raise ValueError("请设置 TUSHARE_TOKEN")
@@ -45,7 +49,7 @@ def build_pit(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, today=None, d
             raise
         if backup.exists():
             shutil.rmtree(backup)
-    print(f"PIT v2 构建完成：{destination}")
+    logger.info("PIT v2 构建完成：{}", destination)
 
 
 def main():
