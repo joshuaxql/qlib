@@ -1,7 +1,7 @@
 """NumPy interface to the pure C expanding kernels (no Python/NumPy C ABI).
 
 Build from the project root: python scripts/build_rolling.py --only expanding
-The four functions return float64 arrays.
+The six functions return float64 arrays.
 Only NaN is treated as missing by the low-level API.
 """
 
@@ -13,7 +13,8 @@ import numpy as np
 
 
 LIBRARY_PATH = Path(__file__).with_name("expanding.dll")
-__all__ = ["expanding_mean", "expanding_slope", "expanding_rsquare", "expanding_resi"]
+__all__ = ["expanding_mean", "expanding_slope", "expanding_rsquare", "expanding_resi",
+           "expanding_corr", "expanding_cov"]
 
 
 def is_available():
@@ -30,19 +31,35 @@ def _library():
     library = ctypes.CDLL(str(LIBRARY_PATH))
     array = np.ctypeslib.ndpointer(dtype=np.float64, ndim=1, flags=("C_CONTIGUOUS", "ALIGNED"))
     for name in __all__:
-        function = getattr(library, f"qlib_{name}")
-        function.argtypes = [array, ctypes.c_size_t, array]
+        function = getattr(library, f"qlib_{name}", None)
+        if function is None:
+            continue
+        function.argtypes = ([array, array] if name in ("expanding_corr", "expanding_cov") else [array]) + [
+            ctypes.c_size_t, array]
         function.restype = ctypes.c_int
     return library
 
 
-def _expanding(name, a):
+def supports(kind):
+    return is_available() and hasattr(_library(), f"qlib_expanding_{kind.lower()}")
+
+
+def _expanding(name, a, left=None):
     values = np.asarray(a, dtype=np.float64)
     if values.ndim != 1:
         raise ValueError("expanding input must be one-dimensional")
     values = np.require(values, dtype=np.float64, requirements=["C", "A"])
+    if left is not None:
+        left = np.asarray(left, dtype=np.float64)
+        if left.ndim != 1 or left.shape != values.shape:
+            raise ValueError("expanding inputs must be one-dimensional with equal lengths")
+        left = np.require(left, dtype=np.float64, requirements=["C", "A"])
     result = np.empty(values.size, dtype=np.float64)
-    status = getattr(_library(), f"qlib_{name}")(values, values.size, result)
+    args = [values] if left is None else [left, values]
+    function = getattr(_library(), f"qlib_{name}", None)
+    if function is None:
+        raise ImportError(f"C {name} kernel is missing; rebuild the expanding library")
+    status = function(*args, values.size, result)
     if status != 0:
         raise ValueError(f"{name}: invalid C expanding arguments (status={status})")
     return result
@@ -66,3 +83,13 @@ def expanding_rsquare(a):
 def expanding_resi(a):
     """Current observation minus its cumulative OLS fit (NaN if current is NaN)."""
     return _expanding("expanding_resi", a)
+
+
+def expanding_corr(left, right):
+    """Pairwise-complete cumulative correlation."""
+    return _expanding("expanding_corr", right, left)
+
+
+def expanding_cov(left, right):
+    """Pairwise-complete cumulative sample covariance (ddof=1)."""
+    return _expanding("expanding_cov", right, left)

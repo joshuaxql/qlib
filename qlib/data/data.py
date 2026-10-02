@@ -3,6 +3,7 @@
 from copy import copy
 from functools import lru_cache
 from pathlib import Path
+import ast
 import re
 
 import numpy as np
@@ -75,6 +76,47 @@ class LocalProvider:
         if end_time is not None:
             view._adjustment_end = pd.Timestamp(end_time)
         return view
+
+    def _signal_view(self):
+        """Use the adjustment anchor observable on each strategy signal date.
+
+        Ordinary price queries retain their query-end qfq convention. This
+        private view also propagates to expression filters in strategy pools.
+        """
+        view = copy(self)
+        view._signal_causal = True
+        return view
+
+    def _expression_frame(self, code, fields, dates, history, allow_future):
+        from .base import ExpressionEngine, validate
+
+        def evaluate(provider, output_dates, evaluation_history):
+            engine = ExpressionEngine(provider, code, evaluation_history, allow_future)
+            engine.prepare(fields)
+            return pd.DataFrame({field: engine.evaluate(field).reindex(output_dates) for field in fields})
+
+        if self.adjust != "qfq" or not getattr(self, "_signal_causal", False) or dates.empty:
+            return evaluate(self, dates, history)
+        price_dependent = any(
+            isinstance(node, ast.Call) and node.func.id == "field" and node.args[0].value in PRICE_FIELDS
+            for field in fields for node in ast.walk(validate(field, allow_future))
+        )
+        if not price_dependent:
+            return evaluate(self, dates, history)
+        # A fixed qfq anchor rescales the entire expression history, including
+        # nested rolling operators and price thresholds. Reusing one evaluation
+        # while the visible anchor stays constant avoids a full run per day.
+        factors = self._daily(code, "factor")
+        anchors = factors.where(np.isfinite(factors) & factors.gt(0)).ffill().reindex(dates)
+        previous = anchors.shift()
+        same_anchor = anchors.eq(previous) | (anchors.isna() & previous.isna())
+        groups = (~same_anchor).cumsum()
+        frames = []
+        for _, group in anchors.groupby(groups, sort=False):
+            end = group.index[-1]
+            view = self._price_view(end_time=end)
+            frames.append(evaluate(view, group.index, self.calendar(end_time=end)))
+        return pd.concat(frames).reindex(dates)
 
     @staticmethod
     def _frequency(freq):
@@ -240,7 +282,7 @@ class LocalProvider:
         or before end_time; 'none': raw prices. The qfq anchor uses the latest
         local factor when end_time is omitted. Non-price fields stay raw.
         """
-        from .base import ExpressionEngine, validate
+        from .base import validate
         provider = self._price_view(adjust, end_time)
         if isinstance(fields, str):
             fields = [fields]
@@ -257,9 +299,7 @@ class LocalProvider:
         for code in mask:
             dates = mask.index[mask[code]]
             if len(dates):
-                engine = ExpressionEngine(provider, code, history, allow_future)
-                engine.prepare(fields)
-                frames[code] = pd.DataFrame({field: engine.evaluate(field).reindex(dates) for field in fields})
+                frames[code] = provider._expression_frame(code, fields, dates, history, allow_future)
         if not frames:
             index = pd.MultiIndex.from_arrays([[], pd.DatetimeIndex([])], names=["instrument", "datetime"])
             return pd.DataFrame(index=index, columns=fields, dtype=float)

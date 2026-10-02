@@ -24,6 +24,10 @@ QLIB_EXPANDING_API int qlib_expanding_mean(const double *input, size_t length, d
 QLIB_EXPANDING_API int qlib_expanding_slope(const double *input, size_t length, double *output);
 QLIB_EXPANDING_API int qlib_expanding_rsquare(const double *input, size_t length, double *output);
 QLIB_EXPANDING_API int qlib_expanding_resi(const double *input, size_t length, double *output);
+QLIB_EXPANDING_API int qlib_expanding_corr(const double *left, const double *right, size_t length,
+                                         double *output);
+QLIB_EXPANDING_API int qlib_expanding_cov(const double *left, const double *right, size_t length,
+                                        double *output);
 
 #ifdef __cplusplus
 }

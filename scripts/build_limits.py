@@ -3,7 +3,6 @@
 import argparse
 from pathlib import Path
 import sys
-from tempfile import TemporaryDirectory
 
 import numpy as np
 import pandas as pd
@@ -14,6 +13,7 @@ if __package__ in (None, ""):
 
 from qlib.log import log_warning, summarize_warnings
 from scripts import config as C
+from scripts._staging import staging_directory
 from scripts.dump.bin import prepare_limits
 from scripts.tushare.data import CsvClient, TushareClient, download_limit_cache
 
@@ -58,8 +58,7 @@ def build_limits(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, download=F
     symbols = pd.Index(spans)
     reader = CsvClient(cache)
     total, covered = 0, 0
-    with TemporaryDirectory(prefix=".limit-build-", dir=root.parent) as temporary:
-        stage = Path(temporary)
+    with staging_directory(root, prefix=".limit-build-") as stage:
         matrix = np.memmap(stage / "limits.f32", mode="w+", dtype="<f4", shape=(len(calendar), len(symbols), 2))
         try:
             for position, date in enumerate(calendar):

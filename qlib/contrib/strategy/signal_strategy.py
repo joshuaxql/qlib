@@ -53,6 +53,8 @@ class TopkStrategy:
         validate(self.score, allow_future=False)
 
     def target_weights(self, provider, start_time, end_time):
+        if hasattr(provider, "_signal_view"):
+            provider = provider._signal_view()
         dates = provider.calendar(start_time, end_time)
         features = provider.features(self.instruments, [self.score], start_time, end_time, allow_future=False)
         if features.empty:
@@ -139,6 +141,8 @@ class TopkDropoutStrategy:
 
     def signal_scores(self, provider, start_time, end_time):
         """Return signal-date scores, respecting historical membership and filters."""
+        if hasattr(provider, "_signal_view"):
+            provider = provider._signal_view()
         if self.signal is None or isinstance(self.signal, str):
             expression = self.score if self.signal is None else self.signal
             features = provider.features(self.instruments, [expression], start_time, end_time, allow_future=False)

@@ -53,7 +53,8 @@ def calculate_factors(instruments, factors, start_time=None, end_time=None, *, p
     """Calculate named expressions with future Ref/Delta disabled.
 
     factors accepts an expression, a sequence, or {name: expression}. Adjustment
-    inherits the provider default unless explicitly supplied.
+    inherits the provider default unless explicitly supplied. qfq factors use
+    the anchor observable on each signal date, keeping historical factors causal.
     """
     provider = D if provider is None else provider
     if isinstance(factors, str):
@@ -62,6 +63,8 @@ def calculate_factors(instruments, factors, start_time=None, end_time=None, *, p
     if not definitions or any(not isinstance(name, str) or not name for name in definitions):
         raise ValueError("factors must contain nonempty string names")
     expressions = list(dict.fromkeys(definitions.values()))
+    if hasattr(provider, "_signal_view"):
+        provider = provider._signal_view()
     data = provider.features(instruments, expressions, start_time, end_time, allow_future=False, adjust=adjust)
     return pd.DataFrame({name: data[expr] for name, expr in definitions.items()}, index=data.index)
 
@@ -99,10 +102,13 @@ def winsorize_factors(factors, *, method="std", n=3.0, mad_scale=1.4826, ddof=0)
             rows = positions[np.isfinite(data[positions, column])]
             if not len(rows) or (method == "std" and len(rows) <= ddof):
                 continue
-            sample = data[rows, column]
-            # Scale first so finite but very large inputs cannot overflow moments.
-            magnitude = np.max(np.abs(sample)) or 1.0
-            sample = sample / magnitude
+            original = data[rows, column]
+            # Binary scaling keeps representable differences. A median anchor
+            # preserves ordinary observations even if the first row is an outlier.
+            exponent = int(np.frexp(np.max(np.abs(original)))[1])
+            sample = np.ldexp(original, -exponent)
+            anchor = np.median(sample)
+            sample = sample - anchor
             if method == "std":
                 center, spread = sample.mean(), sample.std(ddof=ddof)
             else:
@@ -110,7 +116,10 @@ def winsorize_factors(factors, *, method="std", n=3.0, mad_scale=1.4826, ddof=0)
                 spread = np.median(np.abs(sample - center))
             with np.errstate(over="ignore"):
                 width = n * spread * (mad_scale if method == "mad" else 1.0)
-            output[rows, column] = np.clip(sample, center - width, center + width) * magnitude
+            lower, upper = center - width, center + width
+            clipped = (sample < lower) | (sample > upper)
+            output[rows, column] = original
+            output[rows[clipped], column] = np.ldexp(np.clip(sample[clipped], lower, upper) + anchor, exponent)
     return pd.DataFrame(output, index=values.index, columns=values.columns)
 
 
@@ -137,7 +146,9 @@ def standardize_factors(factors, *, ddof=0):
             if np.all(sample == sample[0]):
                 output[rows, column] = 0.0
                 continue
-            sample = sample / np.max(np.abs(sample))
+            exponent = int(np.frexp(np.max(np.abs(sample)))[1])
+            sample = np.ldexp(sample, -exponent)
+            sample = sample - sample[0]
             centered = sample - sample.mean()
             spread = sample.std(ddof=ddof)
             if spread > 0:
@@ -261,7 +272,13 @@ def neutralize_factors(factors, *, provider=None, market_cap="total_mv", min_sam
             scale = np.max(np.abs(size))
             if scale > 0:
                 design = np.column_stack([design, size / scale])
-            target = data[rows, column] - data[rows, column].mean()
+            # Shift only the binary exponent, then subtract an anchor before
+            # centering: this bounds moments while preserving small variation
+            # around a large common offset without division-rounding noise.
+            exponent = int(np.frexp(np.max(np.abs(data[rows, column])))[1])
+            target = np.ldexp(data[rows, column], -exponent)
+            target = target - target[0]
+            target = target - target.mean()
             coefficients, _, rank, _ = np.linalg.lstsq(design, target, rcond=None)
             if len(rows) <= rank:
                 continue
@@ -270,7 +287,7 @@ def neutralize_factors(factors, *, provider=None, market_cap="total_mv", min_sam
             tolerance = np.finfo(float).eps * max(design.shape) * np.linalg.norm(target)
             if np.linalg.norm(residual) <= tolerance:
                 residual[:] = 0.0
-            output[rows, column] = residual
+            output[rows, column] = np.ldexp(residual, exponent)
     return pd.DataFrame(output, index=values.index, columns=values.columns)
 
 

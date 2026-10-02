@@ -45,13 +45,14 @@ class ExpressionFilter(Filter):
     filter_end_time: object = None
 
     def apply(self, provider, universe):
-        from .base import ExpressionEngine
         end = universe.index[-1] if len(universe.index) else None
         provider = provider._price_view(end_time=end)
         history = provider.calendar(end_time=end)
         result = pd.DataFrame(False, index=universe.index, columns=universe.columns)
         for code in universe:
-            values = ExpressionEngine(provider, code, history, allow_future=False).evaluate(self.expression)
+            values = provider._expression_frame(
+                code, [self.expression], universe.index, history, allow_future=False,
+            )[self.expression]
             # NaN/inf never passes an expression condition.
             values = values.reindex(universe.index)
             result[code] = values.notna() & values.ne(0)

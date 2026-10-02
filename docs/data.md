@@ -104,6 +104,8 @@ cn_data/
 
 日线为小端 `float32`：第一项为在交易日历中的起始偏移，其余为连续交易日值，缺失位置保留 NaN。存储价格为未复权原价，volume 为手，total_mv/circ_mv 为万元。VWAP 为 `amount × 10 / volume`，单位元/股。
 股票池、ST 和行业文件每行是 `股票代码 起始日期 结束日期`；同一股票可以有多段有效区间。
+`all` 股票池按上市日开始、退市日前一日结束，并截取到构建日历范围。
+停牌和暂时没有行情不会使股票退出 `all`；行情文件仍按实际首末行情日保存，读取缺失交易日时保留 NaN。
 
 ### 每日涨跌停价格
 
@@ -161,11 +163,50 @@ build_data(download=False)
 # build_data(download=False, resume_dir="D:/data/.cn_data.build")
 ```
 
+发布前先准备完整快照、校验后再替换目标：
+
+```powershell
+.venv\Scripts\python.exe scripts/build_data.py --prepare-only --keep-backup --refresh-csi1000
+# 校验工作目录中的 cn_data 后，发布同一份快照
+.venv\Scripts\python.exe scripts/build_data.py --no-download --keep-backup --refresh-csi1000
+```
+
+默认工作目录是输出目录旁的 `.cn_data.build`，可在两次命令中使用相同的 `--resume-dir 路径`。
+`--prepare-only` 完成全部构建后保留快照和断点，不替换已有数据；恢复已准备的快照时不下载或重建，
+包括 PIT 文件的版本标识和校验值都保持不变。`--keep-backup` 发布后保留旁边的 `cn_data.backup-*` 原目录，
+默认直接运行仍在成功发布后删除原目录。`--no-download` 也可用于只读取已有 CSV 的离线构建。
+Python 接口对应 `publish=False`、`keep_backup=True` 和 `refresh_index_codes=("000852.SH",)`；
+返回准备好的 `cn_data` 路径或正式输出路径。恢复时必须保持相同的定向指数刷新和 `REFRESH_CACHE` 配置。
+股票池、独立 PIT 和涨跌停字段构建共用暂存目录，按数据根目录的默认 Windows ACL 继承访问权限；
+发布不会沿用仅允许临时目录创建者访问的限制权限。暂存目录在成功或失败后均只在已验证的范围内清理。
+
 构建先写入工作目录，成功后替换目标。`build.json` 保存配置和完成状态，CSV 缓存保留。
 日线按日期缓存，指数按月缓存，财务按季度缓存。分页结果在内存合并，完整下载后原子写入 CSV；
 中断时重取尚未完成的 CSV，已完成的历史 CSV 可复用。构建直接读取 CSV 写出 Qlib 数据。
+成功返回的空分页尾页（offset > 0）立即结束分页；第一页空响应和 API 异常仍按配置重试，
+后续页持续异常会中止下载，不保存已收到的部分数据。
+指数成分（包括中证 1000）完整翻页，保留查询月份中的全部快照，不再以第一页代替整月数据。
+财务缓存刷新只更新本次请求的字段；同版本未请求字段保留旧值，请求字段的显式 NaN 仍作为修订保存。
 日线构建包含 `stk_limit/YYYYMMDD.csv`；当日涨跌停价格每次刷新，历史非空缓存可复用。
 相关函数完整签名见[脚本 API](_generated/scripts_index.rst)。
+
+升级后需重新构建已有数据，才能修正此前按末次行情日截断的 `all` 区间。
+仅修复股票池时，可复用当前数据集的上市信息、交易日历和指数 CSV 缓存：
+
+```powershell
+.venv\Scripts\python.exe scripts/build_instruments.py
+# 自定义目录：--provider-uri 路径 --cache-uri CSV缓存路径
+```
+
+此脚本离线重建 `all` 和配置中的指数股票池，沿用已有交易日历截止日，保留其他股票池文件；
+日线、PIT、行业、基础信息和缓存不会重写。全部生成成功后发布，并保留数据目录内的
+`instruments.backup-*` 原股票池备份。完成后调用 `D.clear_cache()` 或重新初始化 provider。
+离线重建只能使用缓存中已有的指数快照，无法补回尚未下载的快照。
+
+此前仅下载中证 1000 第一页的历史缓存、或被部分财务字段刷新覆盖的值，需要重新下载对应缓存；
+`--refresh-csi1000` 只强制刷新中证 1000 历史月份，日线和其他指数仍按正常缓存规则复用。
+设置 `REFRESH_CACHE=True` 可执行全部缓存的全量刷新，修复完成后应恢复为 False。
+源接口已不提供的历史版本无法由程序还原。
 
 下载和构建使用 Loguru 输出关键阶段、目标/断点目录及完成摘要，不再显示逐日、逐股进度条。
 重复的缺失配套记录、非数值记录、空刷新保留缓存等问题，在本次批量操作退出时按类别汇总数量；

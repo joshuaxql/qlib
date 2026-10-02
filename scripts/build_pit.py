@@ -4,7 +4,6 @@ import argparse
 from pathlib import Path
 import shutil
 import sys
-from tempfile import TemporaryDirectory
 import time
 
 import pandas as pd
@@ -15,6 +14,7 @@ if __package__ in (None, ""):
 
 from qlib.log import summarize_warnings
 from scripts import config as C
+from scripts._staging import staging_directory
 from scripts.dump.pit import build_financial
 from scripts.tushare.data import CsvClient, TushareClient, download_financial_cache
 
@@ -32,8 +32,7 @@ def build_pit(provider_uri=C.OUTPUT_DIR, cache_uri=C.CACHE_DIR, *, today=None, d
         cache.mkdir(parents=True, exist_ok=True)
         download_financial_cache(TushareClient(ts.pro_api(C.TOKEN)), cache, today)
     destination = root / "financial"
-    with TemporaryDirectory(prefix=".pit-build-", dir=root.parent) as temporary:
-        stage = Path(temporary)
+    with staging_directory(root, prefix=".pit-build-") as stage:
         if (destination / "fields.json").exists():
             (stage / "financial").mkdir()
             shutil.copyfile(destination / "fields.json", stage / "financial" / "fields.json")

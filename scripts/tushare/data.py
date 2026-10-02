@@ -43,10 +43,11 @@ class TushareClient:
                     raise RuntimeError(f"{api} 请求失败，offset={offset}，已重试 {C.RETRIES} 次") from exc
                 errors += 1
             else:
-                if not page.empty or attempt == C.RETRIES:
+                if not page.empty or offset > 0 or attempt == C.RETRIES:
                     if errors:
                         log_warning(f"Tushare {api} 请求异常后已恢复，异常重试次数", errors)
-                    # Empty ST/financial responses and pagination tails are normal.
+                    # A successful empty later page marks the pagination tail.
+                    # Empty first pages can still be transient and are retried.
                     return page
             time.sleep(3 * (attempt + 1))
 
@@ -65,9 +66,6 @@ class TushareClient:
             previous = fingerprint
             pages.append(page)
             offset += len(page)
-            # ponytail: 中证1000按单快照取第一页；若需月内多快照，改为按快照日下载。
-            if api == "index_weight" and params.get("index_code") == "000852.SH":
-                break
             if len(page) < page_size:
                 break
         return pd.concat(pages, ignore_index=True).drop_duplicates() if pages else page
@@ -183,6 +181,16 @@ def index_month_ranges(index_code, end):
             for month in pd.period_range(start, end, freq="M")]
 
 
+def _validate_index_codes(selection):
+    if isinstance(selection, str):
+        raise ValueError("指数刷新选择必须是代码序列")
+    codes = tuple(sorted(set(selection)))
+    unknown = set(codes) - set(C.INDEX_CODES.values())
+    if unknown:
+        raise ValueError(f"未配置的指数刷新代码：{sorted(unknown)}")
+    return codes
+
+
 def fetch_calendar(client, today):
     target = today + pd.DateOffset(years=1)
     dates = set()
@@ -203,8 +211,9 @@ def fetch_calendar(client, today):
 
 
 @summarize_warnings()
-def download_cache(client, directory, today):
+def download_cache(client, directory, today, *, refresh_index_codes=()):
     """先完成所有下载，任何后续构建失败都不会删除这里的文件。"""
+    refresh_index_codes = _validate_index_codes(refresh_index_codes)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     logger.info("CSV 下载开始：{}，截止日={:%Y-%m-%d}", directory, today)
@@ -257,7 +266,7 @@ def download_cache(client, directory, today):
             cache_csv(path, lambda: client.fetch(
                 "index_weight", index_code=index_code,
                 start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d")),
-                refresh=month == today.to_period("M") or
+                refresh=index_code in refresh_index_codes or month == today.to_period("M") or
                 (path.exists() and cache_day(path) <= month.end_time.normalize()))
 
     def industry_rows():
@@ -327,22 +336,35 @@ def download_financial_cache(client, directory, today, selection=None):
                 incoming = pd.DataFrame(columns=required)
             elif not set(required).issubset(incoming.columns):
                 raise ValueError(f"{table} 响应缺少请求字段: {set(required) - set(incoming.columns)}")
+            incoming = incoming[required].copy()
             if not existing.empty:
-                # Exact-version replacements use the newest download, while
-                # distinct announcement dates and report types remain intact.
-                incoming = pd.concat([existing, incoming], ignore_index=True)
+                # Replace only fields requested for this version. An explicit
+                # NaN in a requested field is still a revision; an unrequested
+                # field is not a request to erase its cached value.
                 keys = ["ts_code", "end_date", "ann_date", "update_flag"]
-                for key in keys:
-                    incoming[key] = incoming[key].astype("string")
-                incoming = incoming.drop_duplicates(keys, keep="last")
+                for frame in (existing, incoming):
+                    for key in keys:
+                        frame[key] = frame[key].astype("string")
+                previous = existing.drop_duplicates(keys, keep="last").set_index(keys)
+                latest = incoming.drop_duplicates(keys, keep="last").set_index(keys)
+                merged = previous.reindex(previous.index.union(latest.index, sort=False))
+                for field in fields:
+                    if field not in merged:
+                        merged[field] = float("nan")
+                    merged[field] = pd.to_numeric(merged[field], errors="raise").astype(float)
+                    merged.loc[latest.index, field] = pd.to_numeric(
+                        latest[field], errors="raise"
+                    ).to_numpy(dtype=float)
+                incoming = merged.reset_index()
             cache_csv(path, lambda frame=incoming: frame, refresh=True)
         logger.info("财务 CSV 缓存就绪：{}", table)
 
 
-def download_data(directory, today):
+def download_data(directory, today, *, refresh_index_codes=()):
     """连接第三方 SDK 并下载；离线构建无需导入 SDK 或配置 Token。"""
     if not C.TOKEN.strip():
         raise ValueError("请设置 TUSHARE_TOKEN 环境变量，或填写 scripts/config.py 的 TOKEN")
     import tushare as ts
 
-    return download_cache(TushareClient(ts.pro_api(C.TOKEN)), directory, today)
+    return download_cache(TushareClient(ts.pro_api(C.TOKEN)), directory, today,
+                          refresh_index_codes=refresh_index_codes)

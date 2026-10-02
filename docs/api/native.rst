@@ -4,14 +4,17 @@ C 与 ctypes API
 Python 包装函数
 ----------------
 
-* :mod:`qlib.data._libs.rolling`：``rolling_mean/rolling_slope/rolling_rsquare/rolling_resi``。
-* :mod:`qlib.data._libs.expanding`：对应的 ``expanding_*`` 四个函数。
+* :mod:`qlib.data._libs.rolling`：``rolling_mean/rolling_slope/rolling_rsquare/rolling_resi``，以及 ``rolling_corr/rolling_cov``。
+* :mod:`qlib.data._libs.expanding`：对应的 ``expanding_*`` 六个函数。
 * :mod:`qlib.data._libs.pit`：``asof_indices(dates, starts, counts, asof)``。
 
 Python 数值包装接受一维数据，转为连续且对齐的 float64 数组，返回等长新数组。
 rolling 的 window 必须是正整数；expanding 没有窗口参数。
 NaN 忽略但回归时间位置保留，有效值不足两个时回归结果为 NaN，常数窗口 R² 为 NaN，末值缺失时残差为 NaN。
 底层数值 API 只将 NaN 视为缺失，表达式层会将无穷值转换为缺失。
+相关和协方差按左右序列成对有效样本计算，协方差采用样本分母 ``count - 1``。
+中心矩使用二进制尺度处理，避免大基数消减和有限输入求和溢出；
+rolling 使用两个聚合栈，退出窗口的值不会通过扣除旧矩污染当前窗口。
 
 PIT 输入日期为 uint32，starts/counts 为 uint64；每组日期有序。
 返回 int64 记录位置数组，取公告日期不晚于 asof 的最后版本，不存在则为 -1。
@@ -37,8 +40,17 @@ Rolling C 接口
 
    返回窗口末值减对应拟合值。
 
+.. c:function:: int qlib_rolling_corr(const double *left, const double *right, size_t length, size_t window, double *output)
+
+   返回成对有效样本的 Pearson 相关系数；任一侧没有方差时为 NaN。
+
+.. c:function:: int qlib_rolling_cov(const double *left, const double *right, size_t length, size_t window, double *output)
+
+   返回成对有效样本的样本协方差。
+
 输入和输出是 length 个 double 的非重叠数组，window > 0；从第一个位置开始计算部分窗口。
-返回 0 表示成功、1 表示参数错误。空数组指针可为 NULL。函数不分配内存。
+返回 0 表示成功、1 表示参数错误、2 表示工作区分配失败或大小溢出。
+空数组指针可为 NULL。计算耗时为 O(length) 摊还，临时工作区为 O(min(window, length))。
 
 .. literalinclude:: ../../qlib/data/_libs/rolling.h
    :language: c
@@ -63,7 +75,16 @@ Expanding C 接口
 
    当前值减累计窗口的末端拟合值。
 
-指针、长度及状态码约定与 rolling 相同。
+.. c:function:: int qlib_expanding_corr(const double *left, const double *right, size_t length, double *output)
+
+   返回累计成对有效样本的 Pearson 相关系数。
+
+.. c:function:: int qlib_expanding_cov(const double *left, const double *right, size_t length, double *output)
+
+   返回累计成对有效样本的样本协方差。
+
+指针及长度约定与 rolling 相同；状态码为 0 或 1。
+计算耗时为 O(length)，固定大小的累计状态不分配堆内存。
 
 .. literalinclude:: ../../qlib/data/_libs/expanding.h
    :language: c

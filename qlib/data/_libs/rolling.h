@@ -18,7 +18,8 @@ extern "C" {
  * NaNs are ignored, but keep their position in regression windows.
  * Partial windows are evaluated from the first observation (min_periods=1).
  * Returns 0 on success, 1 on invalid arguments. Empty arrays may be NULL.
- * No allocation, global state, or Python runtime is required.
+ * Uses O(window) scratch space. Returns 2 on allocation failure.
+ * No global state or Python runtime is required.
  */
 QLIB_API int qlib_rolling_mean(const double *input, size_t length,
                               size_t window, double *output);
@@ -28,6 +29,10 @@ QLIB_API int qlib_rolling_rsquare(const double *input, size_t length,
                                  size_t window, double *output);
 QLIB_API int qlib_rolling_resi(const double *input, size_t length,
                               size_t window, double *output);
+QLIB_API int qlib_rolling_corr(const double *left, const double *right, size_t length,
+                              size_t window, double *output);
+QLIB_API int qlib_rolling_cov(const double *left, const double *right, size_t length,
+                             size_t window, double *output);
 
 #ifdef __cplusplus
 }

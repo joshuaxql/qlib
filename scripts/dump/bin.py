@@ -130,6 +130,23 @@ def write_intervals(path, rows, calendar):
     ))
 
 
+def build_all(root, basic, calendar):
+    """Build listing membership independently of the availability of quotes."""
+    if calendar.empty or basic.empty:
+        raise ValueError("股票列表或交易日历为空")
+    rows = []
+    for item in basic.itertuples():
+        listed = pd.Timestamp(item.list_date)
+        if pd.isna(listed):
+            raise ValueError(f"{item.ts_code} 缺少上市日期")
+        delisted = pd.Timestamp(getattr(item, "delist_date", pd.NaT))
+        end = calendar[-1] if pd.isna(delisted) else min(
+            calendar[-1], delisted - pd.Timedelta(days=1)
+        )
+        rows.append((item.ts_code, max(calendar[0], listed), end))
+    write_intervals(root / "instruments" / "all.txt", rows, calendar)
+
+
 @summarize_warnings()
 def build_daily(client, root, basic, calendar, today):
     """逐日读取 CSV，在磁盘映射数组中对齐后直接输出 .bin。"""
@@ -142,7 +159,6 @@ def build_daily(client, root, basic, calendar, today):
     last = first.copy()
     st_rows = []
     completed = []
-    all_rows = []
     with TemporaryDirectory(prefix=".daily-", dir=root.parent) as temporary:
         # 按日连续写入，不维护数据库、索引或几万个打开的股票文件。
         matrix = np.memmap(Path(temporary) / "daily.f32", mode="w+", dtype="<f4",
@@ -195,12 +211,14 @@ def build_daily(client, root, basic, calendar, today):
                 for field_index, field in enumerate(DAILY_FIELDS):
                     values = np.r_[left, matrix[left:right + 1, position, field_index]].astype("<f4")
                     values.tofile(directory / f"{field}.day.bin")
-                all_rows.append((code, calendar[left], calendar[right]))
         finally:
             del matrix  # 先关闭映射，Windows 才能清理临时数组。
-    write_intervals(root / "instruments" / "all.txt", all_rows, calendar)
+    # Listing membership is independent of whether a quote was published.
+    # In particular, a future resumption must not extend historical membership
+    # backwards across a suspension at the end of an earlier data build.
+    build_all(root, basic, calendar)
     write_intervals(root / "instruments" / "st.txt", st_rows, calendar)
-    logger.info("日线暂存完成：{} 只股票，{} 个交易日", len(all_rows), len(calendar))
+    logger.info("日线暂存完成：{} 只股票，{} 个交易日", int((first >= 0).sum()), len(calendar))
     return calendar
 
 

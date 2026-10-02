@@ -8,9 +8,45 @@ Batch evaluation uses joblib workers and returns dictionaries of result Series.
 
 from typing import Tuple
 
+import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from loguru import logger
+
+
+def _selected_labels(frame, quantile, largest):
+    """Rank finite predictions only; missing labels do not alter the selection."""
+    eligible = frame[np.isfinite(frame["pred"])]
+    count = int(len(eligible) * quantile)
+    selected = eligible.nlargest(count, "pred") if largest else eligible.nsmallest(count, "pred")
+    return selected["label"]
+
+
+def _pearson_corr(left, right):
+    """Compute pairwise Pearson correlation without squaring the original scale."""
+    left, right = left.align(right, join="inner")
+    paired = left.notna() & right.notna()
+    if paired.sum() < 2:
+        return np.nan
+    vectors = []
+    for series in (left, right):
+        values = series[paired].to_numpy(dtype=float)
+        if not np.isfinite(values).all():
+            return np.nan
+        magnitude = np.max(np.abs(values))
+        if magnitude == 0:
+            return np.nan
+        # Binary exponent shifts preserve the significand. Subtract an anchor
+        # before taking the mean so a large common offset cannot erase variation.
+        exponent = int(np.frexp(magnitude)[1])
+        values = np.ldexp(values, -exponent)
+        values = values - values[0]
+        values = values - values.mean()
+        norm = np.linalg.norm(values)
+        if norm == 0:
+            return np.nan
+        vectors.append(values / norm)
+    return float(np.clip(np.dot(*vectors), -1.0, 1.0))
 
 
 def calc_long_short_prec(
@@ -19,9 +55,11 @@ def calc_long_short_prec(
     """Daily positive-return precision of top scores and negative-return precision
     of bottom scores. Inputs are Series indexed by (datetime, instrument).
 
-    Select floor(N * quantile) stocks on each side, using pandas' default
-    nlargest/nsmallest tie handling. is_alpha demeans labels by date before
-    selection. dropna removes missing pred/label pairs before counting N.
+    Select floor(N * quantile) stocks on each side, where N counts finite
+    predictions, using pandas' default nlargest/nsmallest tie handling. Missing
+    labels do not alter selection and are excluded from precision denominators.
+    is_alpha demeans labels by date before selection. dropna explicitly removes
+    missing pred/label pairs before counting N. No selected labels gives NaN.
     The instrument-count guard uses the second index level.
     """
     if is_alpha:
@@ -33,21 +71,12 @@ def calc_long_short_prec(
     if dropna:
         df.dropna(inplace=True)
     group = df.groupby(level=date_col, group_keys=False)
-
-    def N(x):
-        return int(len(x) * quantile)
-
-    long = group.apply(lambda x: x.nlargest(N(x), columns="pred").label)
-    short = group.apply(lambda x: x.nsmallest(N(x), columns="pred").label)
-    groupll = long.groupby(date_col, group_keys=False)
-    l_dom = groupll.apply(lambda x: x > 0)
-    l_c = groupll.count()
-    groups = short.groupby(date_col, group_keys=False)
-    s_dom = groups.apply(lambda x: x < 0)
-    s_c = groups.count()
-    return (l_dom.groupby(date_col, group_keys=False).sum() / l_c), (
-        s_dom.groupby(date_col, group_keys=False).sum() / s_c
-    )
+    if df.empty:
+        empty = pd.Series(index=group.size().index, dtype=float)
+        return empty.copy(), empty.copy()
+    long = group.apply(lambda x: _selected_labels(x, quantile, True).dropna().gt(0).mean())
+    short = group.apply(lambda x: _selected_labels(x, quantile, False).dropna().lt(0).mean())
+    return long, short
 
 
 def calc_long_short_return(
@@ -61,17 +90,18 @@ def calc_long_short_return(
 
     Labels must be raw stock returns, not cross-sectionally normalized labels.
     The second output is long_avg_r: the all-stock label mean.
+    N counts finite predictions. Missing labels do not alter selection by default;
+    dropna=True explicitly filters missing pairs first. Empty sides give NaN.
     """
     df = pd.DataFrame({"pred": pred, "label": label})
     if dropna:
         df.dropna(inplace=True)
     group = df.groupby(level=date_col, group_keys=False)
-
-    def N(x):
-        return int(len(x) * quantile)
-
-    r_long = group.apply(lambda x: x.nlargest(N(x), columns="pred").label.mean())
-    r_short = group.apply(lambda x: x.nsmallest(N(x), columns="pred").label.mean())
+    if df.empty:
+        empty = pd.Series(index=group.size().index, dtype=float)
+        return empty.copy(), empty.copy()
+    r_long = group.apply(lambda x: _selected_labels(x, quantile, True).mean())
+    r_short = group.apply(lambda x: _selected_labels(x, quantile, False).mean())
     r_avg = group.label.mean()
     return (r_long - r_short) / 2, r_avg
 
@@ -89,7 +119,7 @@ def pred_autocorr(pred: pd.Series, lag=1, inst_col="instrument", date_col="datet
     pred_ustk = pred.sort_index().unstack(inst_col)
     corr_s = {}
     for (idx, cur), (_, prev) in zip(pred_ustk.iterrows(), pred_ustk.shift(lag).iterrows()):
-        corr_s[idx] = cur.corr(prev)
+        corr_s[idx] = _pearson_corr(cur, prev)
     return pd.Series(corr_s).sort_index()
 
 
@@ -106,9 +136,10 @@ def calc_ic(pred: pd.Series, label: pd.Series, date_col="datetime", dropna=False
     Index alignment and pairwise missing-value handling follow pandas. dropna
     drops undefined correlations from each output, not rows before grouping.
     Two valid nonconstant pairs suffice; no extra min_samples restriction.
+    Pearson inputs are scaled before centering to avoid moment overflow/underflow.
     """
     df = pd.DataFrame({"pred": pred, "label": label})
-    ic = df.groupby(date_col, group_keys=False).apply(lambda df: df["pred"].corr(df["label"]))
+    ic = df.groupby(date_col, group_keys=False).apply(lambda df: _pearson_corr(df["pred"], df["label"]))
     ric = df.groupby(date_col, group_keys=False).apply(lambda df: df["pred"].corr(df["label"], method="spearman"))
     if dropna:
         return ic.dropna(), ric.dropna()

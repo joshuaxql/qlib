@@ -1,7 +1,7 @@
 """NumPy interface to the pure C rolling kernels (no Python/NumPy C ABI).
 
 Build from the project root: python scripts/build_rolling.py
-The four functions return float64 arrays.
+The six functions return float64 arrays.
 Only NaN is treated as missing by the low-level API.
 """
 
@@ -14,7 +14,7 @@ import numpy as np
 
 
 LIBRARY_PATH = Path(__file__).with_name("rolling.dll")
-__all__ = ["rolling_mean", "rolling_slope", "rolling_rsquare", "rolling_resi"]
+__all__ = ["rolling_mean", "rolling_slope", "rolling_rsquare", "rolling_resi", "rolling_corr", "rolling_cov"]
 
 
 def is_available():
@@ -29,13 +29,22 @@ def _library():
     library = ctypes.CDLL(str(LIBRARY_PATH))
     array = np.ctypeslib.ndpointer(dtype=np.float64, ndim=1, flags=("C_CONTIGUOUS", "ALIGNED"))
     for name in __all__:
-        function = getattr(library, f"qlib_{name}")
-        function.argtypes = [array, ctypes.c_size_t, ctypes.c_size_t, array]
+        function = getattr(library, f"qlib_{name}", None)
+        # Old locally built DLLs remain usable for their original interfaces.
+        # Expression dispatch falls back if a newly added kernel is absent.
+        if function is None:
+            continue
+        function.argtypes = ([array, array] if name in ("rolling_corr", "rolling_cov") else [array]) + [
+            ctypes.c_size_t, ctypes.c_size_t, array]
         function.restype = ctypes.c_int
     return library
 
 
-def _rolling(name, a, window):
+def supports(kind):
+    return is_available() and hasattr(_library(), f"qlib_rolling_{kind.lower()}")
+
+
+def _rolling(name, a, window, left=None):
     if isinstance(window, (bool, np.bool_)) or not isinstance(window, (int, np.integer)) or window < 1:
         raise ValueError("window must be an integer >= 1")
     if window > sys.maxsize:
@@ -44,8 +53,19 @@ def _rolling(name, a, window):
     if values.ndim != 1:
         raise ValueError("rolling input must be one-dimensional")
     values = np.require(values, dtype=np.float64, requirements=["C", "A"])
+    if left is not None:
+        left = np.asarray(left, dtype=np.float64)
+        if left.ndim != 1 or left.shape != values.shape:
+            raise ValueError("rolling inputs must be one-dimensional with equal lengths")
+        left = np.require(left, dtype=np.float64, requirements=["C", "A"])
     result = np.empty(values.size, dtype=np.float64)
-    status = getattr(_library(), f"qlib_{name}")(values, values.size, int(window), result)
+    args = [values] if left is None else [left, values]
+    function = getattr(_library(), f"qlib_{name}", None)
+    if function is None:
+        raise ImportError(f"C {name} kernel is missing; rebuild the rolling library")
+    status = function(*args, values.size, int(window), result)
+    if status == 2:
+        raise MemoryError(f"{name}: cannot allocate rolling scratch space")
     if status != 0:
         raise ValueError(f"{name}: invalid C rolling arguments (status={status})")
     return result
@@ -69,3 +89,13 @@ def rolling_rsquare(a, window):
 def rolling_resi(a, window):
     """Last observation minus its OLS fitted value (NaN if last is NaN)."""
     return _rolling("rolling_resi", a, window)
+
+
+def rolling_corr(left, right, window):
+    """Pairwise-complete rolling correlation, using centered scaled moments."""
+    return _rolling("rolling_corr", right, window, left)
+
+
+def rolling_cov(left, right, window):
+    """Pairwise-complete sample covariance (ddof=1)."""
+    return _rolling("rolling_cov", right, window, left)

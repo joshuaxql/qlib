@@ -13,6 +13,9 @@ strategy = TopkStrategy(
 
 {py:class}`qlib.contrib.strategy.signal_strategy.TopkStrategy` 每 N 个信号交易日选取 topk，等权分配 risk_degree 仓位。
 排序按股票代码稳定处理同值，score 禁止未来引用；ascending=True 选较小值。
+策略使用前复权（provider 的 adjust="qfq"）时，每个信号日分别使用截至当日可见的复权锚，
+历史窗口和股票池表达式过滤也使用同一锚；未来拆股或延长回测终点不会改写此前信号。
+普通 `daily()` / `features()` 前复权查询仍按整个查询的 end_time 取锚。
 
 {py:class}`qlib.contrib.strategy.signal_strategy.WeightStrategy` 接受日期 × 股票权重表。
 每个已提供日期行表示完整目标组合，NaN/未指定股票为 0，零行清仓；未提供的日期不调仓。
@@ -91,6 +94,8 @@ result.save("outputs/backtest")
 benchmark 可传覆盖回测日期的日收益 Series，用于基准与超额收益报告。
 回测通过 Loguru 仅记录开始及完成摘要（权益、收益、费用、成交/结算数、拒绝/部分成交数）；
 逐日账户和逐笔订单详情保留在结果表中，不逐条打印。配置方式见[日志](logging.md)。
+periods_per_year 必须是有限正数。前复权策略按每只股票可见复权锚的变化区间复用表达式计算，
+复权因子频繁变化时会比普通一次性行情查询增加计算量；默认后复权及不复权保持批量计算。
 
 ## 交易配置
 

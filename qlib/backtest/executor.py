@@ -19,8 +19,8 @@ class BacktestEngine:
             provider = D
         if not np.isfinite(initial_cash) or initial_cash <= 0:
             raise ValueError("initial_cash must be finite and positive")
-        if periods_per_year <= 0:
-            raise ValueError("periods_per_year must be positive")
+        if not np.isfinite(periods_per_year) or periods_per_year <= 0:
+            raise ValueError("periods_per_year must be finite and positive")
         self.provider, self.initial_cash = provider, float(initial_cash)
         self.exchange = ExchangeConfig(**exchange) if isinstance(exchange, dict) else (exchange or ExchangeConfig())
         self.periods_per_year = periods_per_year

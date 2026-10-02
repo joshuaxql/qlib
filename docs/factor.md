@@ -34,13 +34,14 @@ autocorr = pred_autocorr(pred, lag=1)
 
 - IC 按成对有效值计算，两对非恒定样本即可计算。RankIC 使用平均秩处理并列值。
 - `calc_ic(dropna=True)` 分别删除两个输出中的 NaN 日期。
-- 多空选每日 `int(N * quantile)` 个最大/最小预测值，收益为 **(多头均值 − 空头均值) / 2**。
-- 多空函数的 `dropna=True` 在选股前删除缺失 pred/label 行；默认 False，N 包含缺失行，均值忽略缺失 label。
+- 多空选每日 `int(N * quantile)` 个最大/最小预测值，N 为当日有限预测值数量；NaN/inf 预测不贡献 N，也不会被选中。收益为 **(多头均值 − 空头均值) / 2**，选股数量为 0 时返回 NaN。
+- 多空函数默认 `dropna=False`，未来 label 缺失不改变选股，收益均值和准确率分母忽略缺失 label；`dropna=True` 明确要求在选股前删除缺失 pred/label 行。
 - `long_avg_r` 是全部输入标签均值，不是多头超额收益。
-- 多头准确率是选中标签中严格大于 0 的比例，空头为严格小于 0；`is_alpha=True` 先按日对标签去均值。
+- 多头准确率是选中有效标签中严格大于 0 的比例，空头为严格小于 0；无有效选中标签时为 NaN，单日期输入也返回按日期索引的 Series。`is_alpha=True` 先按日对标签去均值。
 - precision 的股票数检查使用第二层索引，调用时应使用 `(datetime, instrument)` 顺序。
 - ICIR 使用均值 / 样本标准差，不年化；标准差为 0 时可产生 NaN/inf。
 - 自相关是 Pearson，非 Rank 自相关；稀疏日期中 lag 按实际输入日期行计数。
+- Pearson IC、自相关和中性化使用二进制指数缩放，先减首值再中心化；中性化在有界尺度拟合后还原残差。这避免有限大数/小数的矩运算溢出或下溢，并保留大基数上的小差值。
 - 批量函数采用 joblib，n_jobs=1 串行，-1 使用全部可用 CPU，不打印 joblib 任务进度。
   DataFrame 自相关输入取第一列；仅在存在额外列被忽略时发出 Loguru 警告。
 
@@ -77,11 +78,13 @@ result.save("outputs/factor_analysis")
 | `FactorAnalysisResult.save(directory)` | 导出 8 张 CSV 和 config.json |
 
 `provider=None` 使用全局 D，`adjust=None` 继承 provider 复权配置。因子表索引为 `(instrument, datetime)`，因子列名为非空字符串；标签列为正整数持有期。
+`calculate_factors` 和 `factor_analysis` 的 qfq 因子按各信号日已知的复权因子锚计算；延长查询终点或加入未来拆股，不改变早期因子及排名。普通 `provider.features` 查询继续使用查询终点的前复权锚，收益标签继续按两个端点的调整价格比计算。
 Series 也可输入，name 分别为因子名或持有期。索引必须唯一，datetime 为时间戳；分析以因子表索引为准，缺少标签时保留 NaN，无穷值转换为 NaN。
 
 ### 去极值与标准化
 
 这些操作按**每个交易日的股票横截面、每个因子列**独立计算，仅使用输入表中的有限值。
+标准化先做二进制指数缩放，再减首值中心化；去极值以中位数为锚在缩放后的差值空间计算边界，仅还原实际截断的值，未截断值保持原值。这样可保留大基数上的小变化，并避免有限极大值的矩运算溢出。
 与表达式 `Mean($close, 20)` 的时间窗口统计不同，它们不跨日期拟合，不依赖未来收益标签。
 输入支持 Series / DataFrame，返回保留原列名、按 `(instrument, datetime)` 排序的 DataFrame；不会修改输入。
 

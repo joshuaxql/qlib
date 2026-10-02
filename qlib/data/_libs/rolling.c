@@ -2,111 +2,64 @@
  * Copyright (c) Microsoft Corporation. Licensed under MIT; see LICENSE.
  */
 #include "rolling.h"
+#include "stable_stats.h"
+#include <stdint.h>
+#include <stdlib.h>
 
-#include <math.h>
-
-enum rolling_kind { MEAN, SLOPE, RSQUARE, RESI };
-
-static int rolling(const double *input, size_t length, size_t window,
-                   double *output, enum rolling_kind kind)
+static int rolling(const double *input, const double *left, size_t length,
+                   size_t window, double *output, enum statistic_kind kind)
 {
-    size_t i, count = 0;
-    double x_sum = 0.0, x2_sum = 0.0;
-    double y_sum = 0.0, y2_sum = 0.0, xy_sum = 0.0;
-    double w;
-
-    if (window == 0 || (length != 0 && (input == NULL || output == NULL))) {
-        return 1;
-    }
-    if (length == 0) {
-        return 0;
-    }
-    /* Translating the time axis leaves all four statistics unchanged. */
-    if (window > length) {
-        window = length;
-    }
-    w = (double)window;
-
+    size_t i, front_count = 0, back_count = 0;
+    moments *front, *back, *leaves;
+    if (window == 0 || (length != 0 && (input == NULL || output == NULL))) { return 1; }
+    if (length == 0) { return 0; }
+    if (window > length) { window = length; }
+    if (window > SIZE_MAX / sizeof(moments) / 3) { return 2; }
+    front = malloc(3 * window * sizeof(moments));
+    if (front == NULL) { return 2; }
+    back = front + window;
+    leaves = back + window;
     for (i = 0; i < length; ++i) {
-        const double value = input[i];
-        if (kind != MEAN) {
-            /* Shift existing observations left by one before eviction.
-             * The departing observation is now at x=0.
-             */
-            xy_sum -= y_sum;
-            x2_sum += (double)count - 2.0 * x_sum;
-            x_sum -= (double)count;
-        }
-        if (i >= window && !isnan(input[i - window])) {
-            const double old = input[i - window];
-            --count;
-            y_sum -= old;
-            if (kind == RSQUARE) {
-                y2_sum -= old * old;
-            }
-        }
-        /* Clear accumulated roundoff when the window becomes empty. */
-        if (count == 0) {
-            x_sum = x2_sum = y_sum = y2_sum = xy_sum = 0.0;
-        }
-        if (!isnan(value)) {
-            ++count;
-            y_sum += value;
-            if (kind != MEAN) {
-                x_sum += w;
-                x2_sum += w * w;
-                xy_sum += w * value;
-            }
-            if (kind == RSQUARE) {
-                y2_sum += value * value;
-            }
-        }
-
-        output[i] = NAN;
-        if (kind == MEAN) {
-            if (count != 0) {
-                output[i] = y_sum / (double)count;
-            }
-        } else if (count >= 2) {
-            const double n = (double)count;
-            const double xx = n * x2_sum - x_sum * x_sum;
-            const double xy = n * xy_sum - x_sum * y_sum;
-            if (xx > 0.0) {
-                const double slope = xy / xx;
-                if (kind == SLOPE) {
-                    output[i] = slope;
-                } else if (kind == RESI) {
-                    const double intercept = y_sum / n - slope * x_sum / n;
-                    output[i] = value - (slope * w + intercept);
-                } else {
-                    const double yy = n * y2_sum - y_sum * y_sum;
-                    if (yy > 0.0) {
-                        const double r = xy / sqrt(xx * yy);
-                        output[i] = r * r;
-                    }
+        moments aggregate = {0};
+        const double x = left == NULL ? (double)i : left[i];
+        const moments leaf = observation(x, input[i], left == NULL);
+        /* Aggregate stacks form a queue: O(length) amortized, O(window) space.
+         * Eviction never subtracts moments contaminated by an old outlier.
+         */
+        if (i >= window) {
+            if (front_count == 0) {
+                while (back_count != 0) {
+                    const moments item = leaves[--back_count];
+                    front[front_count] = front_count == 0 ? item :
+                                         combine(item, front[front_count - 1]);
+                    ++front_count;
                 }
             }
+            --front_count;
         }
+        leaves[back_count] = leaf;
+        back[back_count] = back_count == 0 ? leaf : combine(back[back_count - 1], leaf);
+        ++back_count;
+        if (front_count != 0) { aggregate = front[front_count - 1]; }
+        aggregate = combine(aggregate, back[back_count - 1]);
+        output[i] = statistic(aggregate, kind, x, input[i]);
     }
+    free(front);
     return 0;
 }
-
-int qlib_rolling_mean(const double *input, size_t length, size_t window, double *output)
-{
-    return rolling(input, length, window, output, MEAN);
-}
-
-int qlib_rolling_slope(const double *input, size_t length, size_t window, double *output)
-{
-    return rolling(input, length, window, output, SLOPE);
-}
-
-int qlib_rolling_rsquare(const double *input, size_t length, size_t window, double *output)
-{
-    return rolling(input, length, window, output, RSQUARE);
-}
-
-int qlib_rolling_resi(const double *input, size_t length, size_t window, double *output)
-{
-    return rolling(input, length, window, output, RESI);
-}
+#define UNIVARIATE(name, kind) \
+    int qlib_rolling_##name(const double *input, size_t length, size_t window, double *output) \
+    { return rolling(input, NULL, length, window, output, kind); }
+UNIVARIATE(mean, MEAN)
+UNIVARIATE(slope, SLOPE)
+UNIVARIATE(rsquare, RSQUARE)
+UNIVARIATE(resi, RESI)
+#define BIVARIATE(name, kind) \
+    int qlib_rolling_##name(const double *left, const double *right, size_t length, \
+                            size_t window, double *output) \
+    { \
+        if (length != 0 && left == NULL) { return 1; } \
+        return rolling(right, left, length, window, output, kind); \
+    }
+BIVARIATE(corr, CORR)
+BIVARIATE(cov, COV)
