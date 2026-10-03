@@ -40,6 +40,7 @@ class NativeBuildPy(build_py):
 class NativeBdistWheel(bdist_wheel):
     def get_tag(self):
         _, _, platform_tag = super().get_tag()
+        platform_tag = _helper.native_wheel_platform_tag(platform_tag)
         return "py3", "none", platform_tag
 
 

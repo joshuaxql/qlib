@@ -39,6 +39,42 @@ def library_suffix(platform_name: str | None = None) -> str:
     raise NativeBuildError(f"Native wheels are not supported on platform {name!r}")
 
 
+def macos_architectures() -> tuple[str, ...]:
+    """Architectures compiled into the dylibs, independent of Python's slices."""
+    arguments = shlex.split(os.environ.get("ARCHFLAGS", ""))
+    architectures = []
+    for position, argument in enumerate(arguments):
+        if argument == "-arch":
+            if position + 1 == len(arguments):
+                raise NativeBuildError("ARCHFLAGS ends with -arch without an architecture")
+            architectures.append(arguments[position + 1])
+    if not architectures:
+        # platform.machine() follows the running process on macOS, including an
+        # x86-64 Python translated by Rosetta.  A universal2 interpreter's build
+        # configuration does not describe the libraries compiled by this run.
+        if struct.calcsize("P") != 8:
+            raise NativeBuildError("macOS native builds require 64-bit Python")
+        machine = platform.machine().lower()
+        architectures = [{"amd64": "x86_64", "aarch64": "arm64"}.get(machine, machine)]
+    unique = tuple(sorted(set(architectures)))
+    if not set(unique).issubset({"x86_64", "arm64"}):
+        raise NativeBuildError(f"Unsupported macOS native architectures: {unique!r}")
+    return unique
+
+
+def native_wheel_platform_tag(platform_tag: str, platform_name: str | None = None) -> str:
+    """Correct macOS Python-distribution tags to match our compiled libraries."""
+    name = sys.platform if platform_name is None else platform_name
+    if name != "darwin":
+        return platform_tag
+    fields = platform_tag.split("_", 3)
+    if len(fields) != 4 or fields[0] != "macosx":
+        raise NativeBuildError(f"Invalid macOS wheel platform tag: {platform_tag!r}")
+    architectures = macos_architectures()
+    architecture_tag = "universal2" if len(architectures) == 2 else architectures[0]
+    return "_".join([*fields[:3], architecture_tag])
+
+
 def _compiler_command(cc: str | None, platform_name: str) -> list[str]:
     requested = cc or os.environ.get("QLIB_CC") or os.environ.get("CC")
     requested = requested or ("clang" if platform_name == "darwin" else "gcc")
@@ -105,7 +141,11 @@ def compile_command(
         flags += ["-shared", "-static-libgcc"]
     elif platform_name == "darwin":
         flags += ["-dynamiclib", "-Wl,-install_name,@rpath/" + output.name]
-        flags += shlex.split(os.environ.get("ARCHFLAGS", ""))
+        architecture_flags = shlex.split(os.environ.get("ARCHFLAGS", ""))
+        architectures = macos_architectures()
+        flags += architecture_flags
+        if "-arch" not in architecture_flags:
+            flags += ["-arch", architectures[0]]
         deployment_target = os.environ.get("MACOSX_DEPLOYMENT_TARGET")
         if deployment_target:
             flags.append("-mmacosx-version-min=" + deployment_target)

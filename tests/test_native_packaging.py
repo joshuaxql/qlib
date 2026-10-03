@@ -88,6 +88,55 @@ class NativeBuildTests(unittest.TestCase):
         self.assertEqual(command[command.index("-arch") + 1], "arm64")
         self.assertIn("-mmacosx-version-min=11.0", command)
 
+    def test_macos_wheel_tag_matches_thin_libraries(self):
+        for architecture in ("arm64", "x86_64"):
+            with self.subTest(architecture=architecture), patch.dict(os.environ, {"ARCHFLAGS": "-arch " + architecture}):
+                self.assertEqual(
+                    build_native.native_wheel_platform_tag("macosx_11_0_universal2", "darwin"),
+                    "macosx_11_0_" + architecture,
+                )
+
+    def test_macos_wheel_tag_preserves_minimum_system_version(self):
+        with patch.dict(os.environ, {"ARCHFLAGS": "-arch x86_64"}):
+            self.assertEqual(
+                build_native.native_wheel_platform_tag("macosx_10_13_universal2", "darwin"),
+                "macosx_10_13_x86_64",
+            )
+
+    def test_macos_universal2_requires_both_compiled_architectures(self):
+        with patch.dict(os.environ, {"ARCHFLAGS": "-arch arm64 -arch x86_64"}):
+            self.assertEqual(build_native.macos_architectures(), ("arm64", "x86_64"))
+            self.assertEqual(
+                build_native.native_wheel_platform_tag("macosx_11_0_arm64", "darwin"),
+                "macosx_11_0_universal2",
+            )
+
+    def test_macos_without_archflags_uses_running_python_architecture(self):
+        for machine in ("arm64", "x86_64"):
+            with (
+                self.subTest(machine=machine),
+                patch.dict(os.environ, {"ARCHFLAGS": ""}),
+                patch("build_native.platform.machine", return_value=machine),
+                patch("build_native.struct.calcsize", return_value=8),
+            ):
+                command = build_native.compile_command(["clang"], Path("pit.c"), Path("pit.dylib"), "darwin")
+                self.assertEqual(command[command.index("-arch") + 1], machine)
+                self.assertEqual(
+                    build_native.native_wheel_platform_tag("macosx_11_0_universal2", "darwin"),
+                    "macosx_11_0_" + machine,
+                )
+
+    def test_macos_rejects_invalid_architecture_flags(self):
+        for flags in ("-arch", "-arch i386"):
+            with self.subTest(flags=flags), patch.dict(os.environ, {"ARCHFLAGS": flags}):
+                with self.assertRaises(build_native.NativeBuildError):
+                    build_native.macos_architectures()
+
+    def test_other_platform_tags_are_preserved(self):
+        with patch.dict(os.environ, {"ARCHFLAGS": "-arch"}):
+            self.assertEqual(build_native.native_wheel_platform_tag("win_amd64", "win32"), "win_amd64")
+            self.assertEqual(build_native.native_wheel_platform_tag("linux_aarch64", "linux"), "linux_aarch64")
+
     def test_every_library_is_freshly_compiled(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

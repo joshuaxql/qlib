@@ -113,7 +113,7 @@ jobs:
               auditwheel show raw-wheels/*.whl
               auditwheel repair --plat "manylinux_2_17_${WHEEL_ARCH}" --wheel-dir wheelhouse raw-wheels/*.whl
               /opt/python/cp310-cp310/bin/python -m twine check wheelhouse/*.whl
-              /opt/python/cp310-cp310/bin/python -c "from pathlib import Path; p=list(Path(\"wheelhouse\").glob(\"*.whl\")); assert len(p)==1 and \"-py3-none-manylinux_\" in p[0].name, p"
+              /opt/python/cp310-cp310/bin/python -c "import os; from pathlib import Path; from packaging.utils import parse_wheel_filename; p=list(Path(\"wheelhouse\").glob(\"*.whl\")); assert len(p)==1, p; tags=parse_wheel_filename(p[0].name)[3]; assert all(t.interpreter==\"py3\" and t.abi==\"none\" for t in tags) and any(t.platform==\"manylinux_2_17_\"+os.environ[\"WHEEL_ARCH\"] for t in tags), tags"
             '
       - uses: actions/setup-python@v7.0.0
         with:
