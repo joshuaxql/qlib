@@ -1,8 +1,9 @@
 include README.md README.en.md LICENSE .readthedocs.yaml
+include setup.py build_native.py
 recursive-include scripts *.py
 recursive-include docs *.md *.rst *.py *.css Makefile make.bat
 recursive-include tests *.py
 prune docs/_build
 prune docs/_generated
-global-exclude *.pyc *.dll *.so *.pyd
+global-exclude *.pyc *.dll *.so *.dylib *.pyd
 global-exclude __pycache__

@@ -53,17 +53,19 @@ API 页面签名和已有 docstring 来自代码。类的构造方法、私有�
 ## 发布到 PyPI
 
 发行包名为 `qlib-joshuaxql`，导入名为 `qlib`；安装命令见[安装指南](installation.md)。
-发布前同步更新 `pyproject.toml` 与 `qlib/__init__.py` 中的版本号，每个版本只能发布一次。
+发布新版本前同步更新 `pyproject.toml` 与 `qlib/__init__.py` 中的版本号。PyPI 不允许覆盖已经上传的文件；同一版本可以追加不同文件名的平台 wheel。
 
-在项目根目录执行，以下 `0.2.0` 应替换为待发布版本：
+在 GitHub Actions 中手动运行 `Native wheels` 工作流。它构建 Windows、Linux 和 macOS 的平台包，并在隔离安装后验证三个 C 库及其数值结果。
+下载各任务的 wheel 产物到 `dist/`，再在项目根目录执行：
 
 ```powershell
 python -m pip install build twine
-python -m build
-python -m twine check dist/qlib_joshuaxql-0.2.0-py3-none-any.whl dist/qlib_joshuaxql-0.2.0.tar.gz
-python -m twine upload --repository pypi --config-file "$HOME/.pypirc" dist/qlib_joshuaxql-0.2.0-py3-none-any.whl dist/qlib_joshuaxql-0.2.0.tar.gz
+python -m build --sdist
+python -m twine check dist/*.whl dist/*.tar.gz
+python -m twine upload --repository pypi --config-file "$HOME/.pypirc" dist/*.whl dist/*.tar.gz
 ```
 
 Twine 从用户目录的 `.pypirc` 中读取 `[pypi]` 认证配置。凭据保存在本机，不写入仓库或发布包。
-构建生成通用 Python wheel 和源码压缩包；源码包包含数据维护脚本、测试和文档源文件。
-DLL 由 MinGW-w64 在本机编译，数据集从 Hugging Face 单独获取。
+对于已经存在的版本，只上传尚未发布的平台文件，保留已有文件。
+源码包包含 C 源码、构建脚本、数据维护脚本、测试和文档源文件，不包含预编译库。
+平台 wheel 包含预编译 C 库；源码构建时 Windows 使用 MinGW-w64、Linux 使用 GCC、macOS 使用 Clang。数据集从 Hugging Face 单独获取。

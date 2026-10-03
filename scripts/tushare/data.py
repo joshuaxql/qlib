@@ -152,7 +152,8 @@ class CsvClient:
         else:
             path = Path("industry.csv" if api in ("index_classify", "index_member_all") else f"{api}.csv")
         columns = params.get("fields")
-        frame = read_csv(self.directory / path, columns.split(",") if columns else None)
+        read_columns = ["l1_code", "l1_name"] if api == "index_classify" else columns.split(",") if columns else None
+        frame = read_csv(self.directory / path, read_columns)
         if frame.empty:
             return frame
         if api == "stock_basic":
@@ -161,7 +162,9 @@ class CsvClient:
             frame = frame[(frame.exchange == params["exchange"]) &
                           frame.cal_date.between(params["start_date"], params["end_date"])]
         elif api == "index_classify":
-            frame = frame[["l1_code"]].drop_duplicates().rename(columns={"l1_code": "index_code"})
+            frame = frame.drop_duplicates().rename(columns={"l1_code": "index_code", "l1_name": "industry_name"})
+            if columns:
+                frame = frame[[name for name in columns.split(",") if name in frame]]
         elif api == "index_member_all":
             frame = frame[(frame.l1_code == params["l1_code"]) & (frame.is_new == params["is_new"])]
         elif api == "index_weight":

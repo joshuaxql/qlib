@@ -80,8 +80,9 @@ class FactorMetricsTest(unittest.TestCase):
                                -result.summary.loc[("alpha", 1), "ic_mean"])
         with TemporaryDirectory() as temporary:
             result.save(temporary)
-            self.assertEqual(len(list(Path(temporary).glob("*.csv"))), 8)
-            self.assertEqual(json.loads((Path(temporary) / "config.json").read_text())["horizons"], [1, 5])
+            folder = Path(temporary) / "alpha"
+            self.assertEqual(len(list(folder.glob("*.csv"))), 8)
+            self.assertEqual(json.loads((folder / "config.json").read_text())["horizons"], [1, 5])
 
     def test_invalid_panels_and_options(self):
         for values in (self.values.reset_index(), pd.concat([self.values, self.values]), self.values.iloc[:0]):

@@ -5,6 +5,7 @@ imports or arbitrary calls.
 """
 
 import ast
+from copy import deepcopy
 from functools import lru_cache
 import operator
 import re
@@ -85,6 +86,97 @@ def validate(expression, allow_future=True):
     return tree
 
 
+ROLLING = frozenset({"Mean", "Sum", "Std", "Var", "Max", "Min", "Med", "Skew", "Kurt", "Count",
+                     "WMA", "Quantile", "Rank", "IdxMax", "IdxMin", "Slope", "Rsquare", "Resi", "Corr", "Cov"})
+PREFIX_STATISTICS = ROLLING - {"Max", "Min", "IdxMax", "IdxMin", "Count"}
+POINTWISE = frozenset({"Abs", "Sign", "Log", "Exp", "Sqrt", "Power", "Add", "Sub", "Mul", "Div",
+                      "Greater", "Less", "Gt", "Ge", "Lt", "Le", "Eq", "Ne", "And", "Or", "Not",
+                      "IsNull", "IsInf", "If", "Clip"})
+
+
+def _merge_bounds(bounds):
+    bounds = list(bounds)
+    if any(bound is None for bound in bounds):
+        return None
+    return max((bound[0] for bound in bounds), default=0), max((bound[1] for bound in bounds), default=0)
+
+
+def _history_bounds(node):
+    """Conservative trading-row dependencies; None means retain full history."""
+    if isinstance(node, ast.Constant):
+        return 0, 0
+    if isinstance(node, ast.UnaryOp):
+        return _history_bounds(node.operand)
+    if isinstance(node, ast.BinOp):
+        return _merge_bounds((_history_bounds(node.left), _history_bounds(node.right)))
+    if isinstance(node, ast.Compare):
+        return _merge_bounds(_history_bounds(child) for child in [node.left, *node.comparators])
+    if isinstance(node, ast.BoolOp):
+        return _merge_bounds(_history_bounds(child) for child in node.values)
+    if not isinstance(node, ast.Call):
+        return None
+    name = node.func.id
+    if name in ("field", "pitfield", "P", "PRef"):
+        # Report-history dependencies are handled by the PIT event engine.
+        return 0, 0
+    if name in POINTWISE:
+        return _merge_bounds(_history_bounds(child) for child in node.args)
+    if name in PREFIX_STATISTICS:
+        # Low-order rounding in an online window can survive its warmup and
+        # change downstream ties/ranks. Preserve the original accumulation.
+        return None
+    if name not in ROLLING | {"Ref", "Delta"}:
+        return None
+    pairs = name in ("Corr", "Cov")
+    window_index = 2 if pairs else 1
+    argument_count = 3 if pairs or name == "Quantile" else 2
+    if len(node.args) != argument_count:
+        return None
+    try:
+        offset = literal(node.args[window_index])
+    except ValueError:
+        return None
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        return None
+    bounds = _merge_bounds(_history_bounds(child) for child in node.args[:window_index])
+    if bounds is None or offset == 0:
+        # Expanding windows and Ref(x, 0)'s first observation need the origin.
+        return None
+    left, right = bounds
+    if name == "Ref":
+        return max(0, left + offset), max(0, right - offset)
+    if name == "Delta":
+        return left + max(offset, 0), right + max(-offset, 0)
+    return (left + offset - 1, right) if offset > 0 else None
+
+
+@lru_cache(maxsize=128)
+def _expression_tree(expression, allow_future):
+    # Plans contain syntax only, never provider data or an adjustment anchor.
+    # Keep the private plan separate from the mutable AST exposed by validate.
+    tree = deepcopy(validate(expression, allow_future))
+    tree._daily_fields = frozenset(node.args[0].value for node in ast.walk(tree)
+                                  if isinstance(node, ast.Call) and node.func.id == "field")
+    tree._history_bounds = _history_bounds(tree)
+    return tree
+
+
+def daily_fields(expression, allow_future=True):
+    return _expression_tree(expression, allow_future)._daily_fields
+
+
+def history_bounds(expressions, allow_future=True):
+    return _merge_bounds(_expression_tree(expression, allow_future)._history_bounds for expression in expressions)
+
+
+def _node_key(node):
+    # A shared plan's canonical subtree keys are reused by every stock engine.
+    key = getattr(node, "_expression_key", None)
+    if key is None:
+        key = node._expression_key = ast.dump(node)
+    return key
+
+
 class ExpressionEngine:
     def __init__(self, provider, instrument, calendar, allow_future=True):
         self.provider, self.instrument, self.calendar = provider, instrument, calendar
@@ -92,7 +184,7 @@ class ExpressionEngine:
         self.cache = {}
 
     def evaluate(self, expression):
-        tree = validate(expression, self.allow_future)
+        tree = _expression_tree(expression, self.allow_future)
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
             self._prepare_pit([tree])
             result = self._eval(tree)
@@ -101,14 +193,14 @@ class ExpressionEngine:
     def prepare(self, expressions):
         """Share one stock load and one event scan across all PIT projections."""
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            self._prepare_pit([validate(expression, self.allow_future) for expression in expressions])
+            self._prepare_pit([_expression_tree(expression, self.allow_future) for expression in expressions])
 
     def _prepare_pit(self, trees):
         projections = {}
 
         def collect(node):
             if isinstance(node, ast.Call) and node.func.id in ("P", "PRef", "pitfield"):
-                key = ast.dump(node)
+                key = _node_key(node)
                 if key not in self.cache:
                     inner = node if node.func.id == "pitfield" else node.args[0]
                     offset = literal(node.args[1]) if node.func.id == "PRef" else 0
@@ -128,7 +220,7 @@ class ExpressionEngine:
         ids = {name: store.resolve(name) for name in names}
         stock = store.stock(self.instrument)
         results = {key: [] for key in projections}
-        records = stock.records[np.isin(stock.records["field_id"], list(ids.values()))]
+        records = stock.select(list(ids.values()))
         if len(self.calendar) and len(records):
             periods = records["period"].astype(np.int64)
             ordinal = periods // 100 * 4 + periods % 100 - 1
@@ -137,6 +229,8 @@ class ExpressionEngine:
             labels = pd.Index(grid // 4 * 100 + grid % 4 + 1, name="period")
             current = {field_id: np.full(len(grid), np.nan) for field_id in set(ids.values())}
             known = {field_id: np.zeros(len(grid), dtype=bool) for field_id in current}
+            bounds = {field_id: [len(grid), -1] for field_id in current}
+            dependencies = {key: {ids[name] for name in spec[2]} for key, spec in projections.items()}
             for date, updates in stock.events(list(current), self.calendar[-1]):
                 changed = set(map(int, updates["field_id"]))
                 for row in updates:
@@ -144,15 +238,27 @@ class ExpressionEngine:
                     slot = period // 100 * 4 + period % 100 - 1 - first
                     current[field_id][slot] = row["value"]
                     known[field_id][slot] = True
+                    bounds[field_id][0] = min(bounds[field_id][0], slot)
+                    bounds[field_id][1] = max(bounds[field_id][1], slot)
+                event_date = pd.Timestamp(str(date))
                 for key, (inner, offset, fields) in projections.items():
-                    if not changed.intersection(ids[name] for name in fields):
+                    if not changed.intersection(dependencies[key]):
+                        continue
+                    if isinstance(inner, ast.Call) and inner.func.id == "pitfield":
+                        # A raw field/PRef needs one visible report slot, not a
+                        # new Series and full report-expression evaluation.
+                        field_id = ids[inner.args[0].value]
+                        first_visible, last_visible = bounds[field_id]
+                        position = last_visible + offset
+                        value = current[field_id][position] if position >= first_visible else np.nan
+                        results[key].append((event_date, value))
                         continue
                     visible = np.flatnonzero(np.logical_or.reduce([known[ids[name]] for name in fields]))
                     start, stop = int(visible[0]), int(visible[-1]) + 1
                     context = {name: pd.Series(current[ids[name]][start:stop], index=labels[start:stop]) for name in fields}
                     value = pd.Series(self._eval(inner, context), index=labels[start:stop])
                     position = len(value) - 1 + offset
-                    results[key].append((pd.Timestamp(str(date)), value.iloc[position] if position >= 0 else np.nan))
+                    results[key].append((event_date, value.iloc[position] if position >= 0 else np.nan))
         for key, events in results.items():
             if events:
                 dates, values = zip(*events)
@@ -163,7 +269,7 @@ class ExpressionEngine:
                 self.cache[key] = pd.Series(np.nan, index=self.calendar)
 
     def _eval(self, node, pit=None):
-        key = ast.dump(node)
+        key = _node_key(node)
         if pit is None and key in self.cache:
             return self.cache[key]
         result = self._visit(node, pit)

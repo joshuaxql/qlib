@@ -7,13 +7,14 @@ Only NaN is treated as missing by the low-level API.
 
 import ctypes
 from functools import lru_cache
-from pathlib import Path
 import sys
 
 import numpy as np
 
+from ._path import library_path
 
-LIBRARY_PATH = Path(__file__).with_name("rolling.dll")
+
+LIBRARY_PATH = library_path("rolling")
 __all__ = ["rolling_mean", "rolling_slope", "rolling_rsquare", "rolling_resi", "rolling_corr", "rolling_cov"]
 
 
@@ -25,7 +26,9 @@ def is_available():
 @lru_cache(maxsize=1)
 def _library():
     if not is_available():
-        raise ImportError("C rolling library is missing; run python scripts/build_rolling.py with MinGW-w64")
+        raise ImportError(
+            "C rolling library is missing; install a platform wheel or run python scripts/build_rolling.py"
+        )
     library = ctypes.CDLL(str(LIBRARY_PATH))
     array = np.ctypeslib.ndpointer(dtype=np.float64, ndim=1, flags=("C_CONTIGUOUS", "ALIGNED"))
     for name in __all__:

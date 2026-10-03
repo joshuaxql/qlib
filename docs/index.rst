@@ -2,7 +2,7 @@ Qlib 文档
 =========
 
 本地量化研究工具：从行情与财务数据读取、表达式因子计算，到横截面因子评估和日频回测。
-提供行情与财务数据管理、因子评估和回测功能，数值核心使用纯 C 和 MinGW-w64。
+提供行情与财务数据管理、因子评估和回测功能，数值核心使用跨平台纯 C 和 ctypes。
 
 快速入口
 --------
@@ -18,6 +18,7 @@ Qlib 文档
 
    overview
    installation
+   native-wheels
    quickstart
    data
    expressions
@@ -25,6 +26,7 @@ Qlib 文档
    pit
    factor
    backtest
+   performance
    logging
    structure
 

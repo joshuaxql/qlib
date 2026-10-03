@@ -3,9 +3,9 @@
 ## 环境要求
 
 - Python **3.10 或更新版本**；文档构建推荐 Python **3.12**。
-- 核心依赖：NumPy、pandas、SciPy、joblib、Loguru。
+- 核心依赖：NumPy、pandas、SciPy、joblib、Loguru、pyecharts。
 - 下载数据：额外安装 Tushare，并配置账户 Token。
-- 原生 DLL：Windows、与 Python 位数匹配的 MinGW-w64 GCC。
+- 平台 wheel 安装不需要编译器。源码构建需要 Windows MinGW-w64 GCC、Linux GCC 或 macOS Clang，编译器目标必须与 Python 架构匹配。
 
 PyPI 发行包名为 **`qlib-joshuaxql`**，Python 导入名为 **`qlib`**，建议使用独立虚拟环境安装。
 
@@ -16,7 +16,10 @@ python -m pip install qlib-joshuaxql
 ```
 
 [PyPI 项目页面](https://pypi.org/project/qlib-joshuaxql/) 提供版本信息、wheel 和源码压缩包。
-通用 wheel 可在 Windows、Linux 和 macOS 安装，提供数据读取、因子分析和日频回测。
+平台 wheel 内置 rolling、expanding 和 PIT 三个预编译库，提供数据读取、因子分析和日频回测。
+覆盖 Windows x86_64、Linux x86_64/aarch64 和 macOS arm64/x86_64；pip 自动选择兼容的平台文件。
+Linux wheel 采用 `manylinux_2_17` / `manylinux2014` 标签；macOS 的最低系统版本以最终 wheel 的 `macosx_*` 标签为准。
+NumPy、pandas 和 SciPy 仍各自遵循其版本的系统要求。
 数据集需单独下载或构建，见下方“准备数据”。
 
 ```python
@@ -38,9 +41,19 @@ Loguru 随核心包自动安装；日志仅保留关键事件，不再依赖 tqd
 wheel 提供 `qlib` 库与 C 源文件；运行本页及其他指南中的 `scripts/`、`tests/`、`docs/` 命令，
 请使用 Git 仓库或 PyPI 源码压缩包的根目录。
 
+0.2.0 原先发布的通用 wheel 和源码包保留；新增平台 wheel 使用不同文件名。
+如果已安装旧通用 wheel，仅执行升级会保留同版本安装。重新安装可选择新平台文件：
+
+```bash
+python -m pip install --upgrade --force-reinstall qlib-joshuaxql==0.2.0
+```
+
+已有满足要求的依赖时可加 `--no-deps`，避免重新安装 NumPy 等依赖。
+
 ## 从项目源码安装
 
 获取源码并在项目根目录执行：
+先准备目标平台的 C 编译器；Windows 使用 MinGW-w64 GCC，不使用 MSVC。
 
 ```powershell
 git clone https://github.com/joshuaxql/qlib.git
@@ -55,7 +68,7 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[download,docs]"
 ```
 
-Linux/macOS 的纯 Python 使用及文档构建：
+Linux/macOS 的源码安装及文档构建：
 
 ```bash
 python3 -m venv .venv
@@ -75,12 +88,23 @@ python3 -m venv .venv
 .venv\Scripts\python.exe scripts/build_rolling.py --only pit
 ```
 
-编译器必须是 MinGW-w64 GCC，不使用 MSVC。脚本会检查目标架构和 Python 位数，输出位于
-`qlib/data/_libs/`。DLL 是本机生成文件；更新前应退出已加载它的 Python 进程。
+Linux/macOS 使用对应的解释器和 GCC/Clang：
 
-PyPI 通用 wheel 不包含预编译 DLL。未构建 DLL 时，表达式层的数值运算使用 pandas/NumPy 回退，PIT 查询也有回退。
-直接调用 `rolling_*`、`expanding_*` 底层 Python 包装函数则需要对应 DLL。
-文档构建只导入模块，不调用本地数据初始化或 DLL，因此 Read the Docs 的 Linux 环境可直接构建。
+```bash
+.venv/bin/python scripts/build_rolling.py
+# 显式选择编译器
+.venv/bin/python scripts/build_rolling.py --cc clang
+```
+
+脚本检查目标架构，输出位于 `qlib/data/_libs/`：Windows 为 `.dll`，Linux 为 `.so`，macOS 为 `.dylib`。
+可使用 `QLIB_CC` 或 `CC` 指定源码包构建的编译器，优先级为 `QLIB_CC`、`CC`、平台默认编译器。
+macOS 构建还支持 `ARCHFLAGS` 与 `MACOSX_DEPLOYMENT_TARGET`。
+修改或替换已加载的原生库前，退出使用它的 Python 进程。
+
+未找到原生库时，表达式计算和 PIT 查询使用 pandas/NumPy 回退；直接调用底层
+`rolling_*`、`expanding_*` 包装函数需要对应原生库。
+既有 0.2.0 通用 wheel 没有这些库，仍可使用回退；其源码包也保留原发布内容。
+新源码构建和多平台 wheel 验证见[原生 wheel 构建](native-wheels.md)。
 
 ## 准备数据
 
@@ -102,4 +126,11 @@ provider = qlib.init("~/.qlib/qlib_data/cn_data", adjust="hfq")
 .venv\Scripts\python.exe -m sphinx -b html -W --keep-going docs docs/_build/html
 ```
 
-原生数值测试需要先构建 DLL。文档生成后打开 `docs/_build/html/index.html`。
+源码中的原生数值测试需要先构建本机库。已安装平台 wheel 时，可在新源码目录运行：
+
+```bash
+python -I scripts/verify_native.py --require-installed
+```
+
+此命令拒绝导入旁边的源码包，强制校验三个库及表达式原生路径，任何 Python 回退均导致失败。
+文档生成后打开 `docs/_build/html/index.html`。

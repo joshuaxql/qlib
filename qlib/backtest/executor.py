@@ -12,6 +12,67 @@ from qlib.contrib.evaluate import risk_analysis
 from qlib.contrib.strategy.signal_strategy import TopkDropoutStrategy, WeightStrategy
 
 
+class _QuoteRows(dict):
+    """Create a real pandas bar only when the session actually uses a stock."""
+
+    def __init__(self, frames, position):
+        super().__init__()
+        self.frames, self.position = frames, position
+
+    def __missing__(self, code):
+        bar = self.frames[code].iloc[self.position]
+        self[code] = bar
+        return bar
+
+
+class _ExecutionQuotes:
+    """Keep execution-window quotes and preceding close/factor references.
+
+    The reference uses the last non-null close, including infinity, just like
+    ``close.dropna()``. Its factor comes from that same observation; a factor
+    published during a suspension must not replace the reference's factor.
+    """
+
+    def __init__(self, provider, codes, fields, calendar, dates):
+        self.frames, self.previous = {}, {}
+        self.calendar_positions = calendar.get_indexer(dates)
+        for code in codes:
+            # Align one stock at a time before slicing: this also retains the
+            # full-calendar dtype promotion of custom provider Series.
+            raw = {field: provider._daily(code, field).reindex(calendar) for field in fields}
+            self.frames[code] = pd.DataFrame({field: raw[field].reindex(dates) for field in fields})
+            close = raw["close"]
+            last = np.maximum.accumulate(np.where(close.notna(), np.arange(len(calendar)), -1))
+            preceding = np.r_[-1, last[:-1]][self.calendar_positions]
+            valid = preceding >= 0
+            # Index the original arrays rather than coercing to float64. The
+            # old scan can return float32/integer scalars from custom providers.
+            observed = np.maximum(preceding, 0)
+
+            def take(series):
+                # Nullable Int64/UInt64 with missing values can be converted to
+                # float64 by to_numpy(), losing integer bits above 2**53.
+                if isinstance(series.dtype, pd.api.extensions.ExtensionDtype):
+                    return series.array.take(observed)
+                return series.to_numpy()[observed]
+
+            prices = take(close)
+            factors = take(raw["factor"]) if "factor" in raw else np.full(len(dates), np.nan)
+            self.previous[code] = prices, factors, valid
+
+    def bars(self, position):
+        return _QuoteRows(self.frames, position)
+
+    def previous_close(self, code, position, factor, adjust_positions):
+        prices, factors, valid = self.previous[code]
+        if not valid[position]:
+            return np.nan
+        price = prices[position]
+        if adjust_positions and np.isfinite(factor) and factor > 0:
+            price *= factors[position] / factor
+        return price
+
+
 class BacktestEngine:
     def __init__(self, provider=None, *, initial_cash=1_000_000, exchange=None, periods_per_year=252):
         if provider is None:
@@ -56,7 +117,7 @@ class BacktestEngine:
         fields.update(set(provider.fields("daily")) & {"up_limit", "down_limit"})
         # Execution quotes must be raw: corporate actions are accounted for
         # through equivalent shares below, independently of signal adjustment.
-        quotes = {code: pd.DataFrame({f: provider._daily(code, f).reindex(calendar) for f in fields}) for code in codes}
+        quotes = _ExecutionQuotes(provider, codes, fields, calendar, dates)
         basic = provider.stock_basic().set_index("ts_code")
         membership = provider.universe("all", dates[0], dates[-1])
         if benchmark is not None:
@@ -70,8 +131,8 @@ class BacktestEngine:
         cash, previous_equity = self.initial_cash, self.initial_cash
         holdings, marks, factors, holding_days = {}, {}, {}, {}
         reports, positions, trades, orders = [], [], [], []
-        for date in dates:
-            bars = {code: frame.loc[date] for code, frame in quotes.items()}
+        for position, date in enumerate(dates):
+            bars = quotes.bars(position)
             # Adjustment-factor changes are modelled as equivalent shares, not
             # exact cash dividends/rights issues. No return jump at a pure split.
             for code in list(holdings):
@@ -110,7 +171,7 @@ class BacktestEngine:
                 price = bars[code].get(exchange.deal_price, np.nan)
                 deal_marks[code] = price if np.isfinite(price) and price > 0 else marks[code]
             equity_at_deal = cash + sum(holdings[c] * p for c, p in deal_marks.items())
-            index = calendar.get_loc(date)
+            index = quotes.calendar_positions[position]
             signal_date = calendar[index - 1] if index > 0 else None
             costs, traded = 0.0, 0.0
             reason_cache = {}
@@ -120,12 +181,8 @@ class BacktestEngine:
                 if key in reason_cache:
                     return reason_cache[key]
                 bar = bars[code]
-                previous = quotes[code].iloc[:index]
-                valid_previous = previous.close.dropna()
-                previous_close = valid_previous.iloc[-1] if len(valid_previous) else np.nan
                 factor = bar.get("factor", np.nan)
-                if exchange.adjust_positions and len(valid_previous) and np.isfinite(factor) and factor > 0:
-                    previous_close *= previous.loc[valid_previous.index[-1], "factor"] / factor
+                previous_close = quotes.previous_close(code, position, factor, exchange.adjust_positions)
                 reason = exchange.block_reason(side, bar, previous_close)
                 if both_limits and not reason:
                     reason = exchange.block_reason("sell" if side == "buy" else "buy", bar, previous_close)

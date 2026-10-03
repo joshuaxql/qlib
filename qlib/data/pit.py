@@ -132,10 +132,20 @@ class StockPIT:
         self.dates = np.ascontiguousarray(records["date"])
         self.starts = np.ascontiguousarray((index["offset"] - HEADER.size) // RECORD_DTYPE.itemsize)
         self.counts = np.ascontiguousarray(index["count"])
-        self.event_order = np.argsort(self.dates, kind="stable")
-        self.nbytes = sum(a.nbytes for a in (records, index, self.dates, self.starts, self.counts, self.event_order))
-        for array in (records, index, self.dates, self.starts, self.counts, self.event_order):
+        self._event_order = None
+        # Reserve the optional event-order allocation up front: a cached stock
+        # remains within PITStore's byte budget when events are first requested.
+        self.nbytes = sum(a.nbytes for a in (records, index, self.dates, self.starts, self.counts))
+        self.nbytes += len(self.dates) * np.dtype(np.intp).itemsize
+        for array in (records, index, self.dates, self.starts, self.counts):
             array.flags.writeable = False
+
+    @property
+    def event_order(self):
+        if self._event_order is None:
+            self._event_order = np.argsort(self.dates, kind="stable")
+            self._event_order.flags.writeable = False
+        return self._event_order
 
     @classmethod
     def read(cls, directory):
@@ -145,11 +155,14 @@ class StockPIT:
         if generation != index_generation:
             raise ValueError(f"PIT data/index generation mismatch (incomplete update): {directory}")
         if len(records):
-            order = np.lexsort((records["date"], records["period"], records["field_id"]))
-            if not np.array_equal(order, np.arange(len(records))):
+            same_field = records["field_id"][1:] == records["field_id"][:-1]
+            same_period = records["period"][1:] == records["period"][:-1]
+            same = same_field & same_period
+            unsorted = ((records["field_id"][1:] < records["field_id"][:-1]) |
+                        (same_field & (records["period"][1:] < records["period"][:-1])) |
+                        (same & (records["date"][1:] < records["date"][:-1])))
+            if np.any(unsorted):
                 raise ValueError(f"Unsorted PIT records: {directory}")
-            same = ((records["field_id"][1:] == records["field_id"][:-1]) &
-                    (records["period"][1:] == records["period"][:-1]))
             if np.any(same & (records["date"][1:] == records["date"][:-1])):
                 raise ValueError(f"Duplicate PIT version: {directory}")
             expected_next = np.full(len(records), NO_NEXT, dtype=np.uint64)
@@ -161,16 +174,43 @@ class StockPIT:
             raise ValueError(f"Invalid PIT period index: {directory}")
         return cls(records, index)
 
+    def _field_ranges(self, field_ids):
+        fields = self.index["field_id"]
+        for field_id in sorted(set(field_ids)):
+            start = int(np.searchsorted(fields, field_id))
+            stop = int(np.searchsorted(fields, field_id, side="right"))
+            if start < stop:
+                yield start, stop
+
+    def select(self, field_ids):
+        """Select ordered contiguous field blocks without scanning all records."""
+        blocks = []
+        for start, stop in self._field_ranges(field_ids):
+            first = int(self.starts[start])
+            last = int(self.starts[stop]) if stop < len(self.index) else len(self.records)
+            blocks.append(self.records[first:last])
+        if not blocks:
+            return self.records[:0]
+        return blocks[0] if len(blocks) == 1 else np.concatenate(blocks)
+
     def snapshot(self, field_ids, asof):
-        groups = np.isin(self.index["field_id"], field_ids)
+        ranges = list(self._field_ranges(field_ids))
+        groups = np.concatenate([np.arange(start, stop) for start, stop in ranges]) if ranges else np.empty(0, dtype=int)
         positions = asof_indices(self.dates, self.starts[groups], self.counts[groups], date_number(asof))
         return self.records[positions[positions >= 0]]
 
     def events(self, field_ids, end):
-        order = self.event_order
-        order = order[np.isin(self.records["field_id"][order], field_ids) & (self.dates[order] <= date_number(end))]
+        ranges = list(self._field_ranges(field_ids))
+        blocks = []
+        for start, stop in ranges:
+            first = int(self.starts[start])
+            last = int(self.starts[stop]) if stop < len(self.index) else len(self.records)
+            blocks.append(np.arange(first, last))
+        order = np.concatenate(blocks) if blocks else np.empty(0, dtype=int)
+        order = order[self.dates[order] <= date_number(end)]
         if not len(order):
             return
+        order = order[np.argsort(self.dates[order], kind="stable")]
         dates = self.dates[order]
         boundaries = np.r_[0, np.flatnonzero(dates[1:] != dates[:-1]) + 1, len(order)]
         for start, stop in zip(boundaries[:-1], boundaries[1:]):
@@ -245,6 +285,8 @@ class PITStore:
         self.cached_bytes = 0
         self._registry_signature = None
         self._registry = None
+        self._names = {}
+        self._suffixes = {}
 
     @property
     def registry(self):
@@ -252,15 +294,18 @@ class PITStore:
         if signature != self._registry_signature:
             self._registry = read_registry(self.root)
             self._registry_signature = signature
+            self._names = {meta["name"]: int(key) for key, meta in self._registry["fields"].items()}
+            self._suffixes = {}
+            for name, field_id in self._names.items():
+                self._suffixes.setdefault(name.split(".")[-1], []).append(field_id)
             self.cache.clear()
             self.cached_bytes = 0
         return self._registry["fields"]
 
     def resolve(self, name):
         name = name.removeprefix("$$")
-        fields = self.registry
-        exact = [int(key) for key, meta in fields.items() if meta["name"] == name]
-        matches = exact or [int(key) for key, meta in fields.items() if meta["name"].split(".")[-1] == name]
+        self.registry  # Refresh maps and invalidate stocks after a dictionary update.
+        matches = [self._names[name]] if name in self._names else self._suffixes.get(name, [])
         if len(matches) != 1:
             raise KeyError(f"Unknown or ambiguous PIT field: {name}; use a name from fields('financial')")
         return matches[0]

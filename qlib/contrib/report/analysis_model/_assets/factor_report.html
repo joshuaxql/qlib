@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>因子研究报告</title>
+  <style>
+    * { box-sizing:border-box; }
+    :root { color-scheme:light; }
+    body { margin:0; color:#202124; background:#fff; font:13px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
+    main { max-width:1240px; margin:0 auto; padding:32px 28px 25px; }
+    h1 { margin:0 0 4px; font-size:23px; font-weight:550; overflow-wrap:anywhere; }
+    .controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px 24px; margin:17px 0 24px; font-size:12px; }
+    .control { display:flex; align-items:center; gap:9px; min-width:0; }
+    select { background:#fff; color:#222; font:inherit; padding:4px 22px 4px 7px; border:1px solid #ddd; border-radius:2px; }
+    select:focus-visible,summary:focus-visible { outline:2px solid #9aabc7; outline-offset:3px; }
+    .section { margin:25px 0 31px; }
+    .section-header { display:flex; align-items:baseline; justify-content:space-between; border-bottom:1px solid #e8e8e8; padding-bottom:6px; margin-bottom:15px; }
+    h2 { margin:0; font-size:16px; font-weight:550; }
+    .grid,.tables { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:21px 28px; }
+    .performance-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:23px 16px; margin:20px 0 28px; font-variant-numeric:tabular-nums; }
+    .performance-metric { min-width:0; }
+    .performance-metric h3 { color:#777; font-size:11px; font-weight:400; margin:0 0 5px; }
+    .performance-value { font-size:19px; font-weight:500; line-height:1.3; overflow-wrap:anywhere; }
+    .card { min-width:0; background:#fff; }
+    .card.wide { grid-column:1/-1; }
+    .card-head { padding:2px 0 3px; }
+    h3 { margin:0 0 2px; font-size:12px; font-weight:550; overflow-wrap:anywhere; }
+    .chart { width:100%; height:290px; }
+    .chart.tall { height:335px; }
+    .chart.compact { height:250px; }
+    .chart-message { height:100%; display:grid; place-content:center; text-align:center; color:#aaa; gap:4px; padding:25px; font-size:11px; }
+    .chart-message strong { font-size:12px; color:#999; font-weight:400; }
+    .table-wrap { overflow-x:auto; }
+    table { border-collapse:collapse; width:100%; font-size:11px; font-variant-numeric:tabular-nums; margin-top:6px; }
+    th,td { text-align:right; white-space:nowrap; padding:5px 9px; border-bottom:1px solid #eee; }
+    th { font-weight:500; color:#666; }
+    th:first-child,td:first-child { text-align:left; padding-left:0; }
+    th.selected-cell,td.selected-cell { background:#f7f8fa; }
+    summary { cursor:pointer; width:fit-content; }
+    .sector-empty { padding:25px 0; color:#999; font-size:11px; }
+    .licenses { margin-top:10px; color:#999; font-size:10px; }
+    .licenses pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px 0; font:10px/1.6 Consolas,monospace; max-height:300px; overflow:auto; }
+    .error-panel { margin:20px 0; color:#9d4545; font-size:12px; }
+    [hidden] { display:none!important; }
+    @media (max-width:1050px) { .performance-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+    @media (max-width:760px) { main { padding:22px 16px; }.grid,.tables { grid-template-columns:1fr; gap:19px; }.chart { height:285px; }.performance-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; } }
+    @media print { main { max-width:none; padding:0; }.controls { display:none; }.card { break-inside:avoid; }.chart { height:280px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1 id="report-title"></h1></header>
+    <div class="controls">
+      <div class="control"><label for="horizon-select">收益持有期</label><select id="horizon-select"></select></div>
+      <div class="control"><label for="fee-select">手续费</label><select id="fee-select"></select></div>
+    </div>
+    <div id="error" class="error-panel" hidden></div>
+    <section id="overview" class="section">
+      <div class="section-header"><h2>绩效指标</h2></div>
+      <div class="performance-grid" id="performance-metrics"></div>
+      <div class="tables" id="metric-tables"></div>
+    </section>
+    <section id="returns" class="section">
+      <div class="section-header"><h2>收益</h2></div>
+      <div class="grid" id="return-charts"></div>
+    </section>
+    <section id="information" class="section">
+      <div class="section-header"><h2>信息系数</h2></div>
+      <div class="grid" id="ic-charts"></div>
+    </section>
+    <section id="turnover" class="section">
+      <div class="section-header"><h2>换手与自相关</h2></div>
+      <div class="grid" id="stability-charts"></div>
+    </section>
+    <section id="sectors" class="section">
+      <div class="section-header"><h2>行业</h2></div>
+      <div class="grid" id="sector-charts"></div>
+      <div id="sector-empty" class="sector-empty" hidden>本次报告未提供行业标签。</div>
+    </section>
+    <details class="licenses" id="licenses" hidden><summary>开源组件与许可证</summary><div id="license-content"></div></details>
+  </main>
+  <script>__ECHARTS_LIBRARY__</script>
+  <script id="report-data" type="application/json">__REPORT_DATA__</script>
+  <script>
+  'use strict';
+  (function () {
+    const registry = new Map();
+    const errors = [];
+    let payload, selectedHorizon, selectedFee = 'none';
+    let observer, resizeObserver;
+    const el = id => document.getElementById(id);
+    const finite = value => typeof value === 'number' && Number.isFinite(value);
+    const fmt = (value, digits = 3) => finite(value) ? (Math.abs(value) < .5*10**(-digits) ? 0 : value).toLocaleString('en-US', {maximumFractionDigits:digits,minimumFractionDigits:digits}) : '—';
+    const integer = value => finite(value) ? value.toLocaleString('en-US',{maximumFractionDigits:0}) : '—';
+    const percent = value => finite(value) ? fmt(value * 100, 1) + '%' : '—';
+    const performancePercent = value => finite(value) ? fmt(value * 100, 2) + '%' : '—';
+    const bps = value => finite(value) ? fmt(value, 2) : '—';
+    const correlationLabel = metric => metric === 'ic' ? 'Pearson IC' : 'Rank IC';
+    const factor = () => payload.factors[0];
+    const rawHorizon = (value = selectedHorizon) => factor().horizons[String(value)];
+    const feeOptions = () => payload.meta.fee_options || [{value:'none',label:'无'}];
+    function horizon(value = selectedHorizon) {
+      const gross=rawHorizon(value), net=(gross.fee_scenarios || {})[selectedFee];
+      if (selectedFee === 'none' || !net) return gross;
+      return {...gross,quantiles:net.quantiles,performance:net.performance,
+        sector:{...gross.sector,quantile_returns:net.sector.quantile_returns}};
+    }
+    const hasValues = values => (values || []).some(finite);
+    function node(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      if (text !== undefined) element.textContent = String(text);
+      return element;
+    }
+    function message(error) {
+      errors.push(String(error));
+      el('error').hidden = false;
+      el('error').textContent = '报告渲染出现问题：' + String(error);
+    }
+    function tooltipNumber(value) {
+      if (Array.isArray(value)) return tooltipNumber(value[value.length-1]);
+      if (value && typeof value === 'object' && 'value' in value) return tooltipNumber(value.value);
+      return finite(value) ? value : null;
+    }
+    function chartOption(id, metric = 'ic') {
+      const gross=rawHorizon(), options=gross.chart_options;
+      const isReturnChart=['mean-quantile','quantile-distribution','quantile-cumulative'].includes(id) || /^sector-\d+$/.test(id);
+      const fee=selectedFee !== 'none' && isReturnChart ? (gross.fee_scenarios || {})[selectedFee] : null;
+      const netSource=fee && (((factor().fee_chart_options || {})[selectedFee] || {})[id] ||
+        ((((fee.chart_options || {}).common) || {})[id]));
+      if (selectedFee !== 'none' && isReturnChart && !netSource) throw new Error('缺少手续费 pyecharts 图表配置：'+id);
+      const source = netSource || (factor().chart_options || {})[id] || (id === 'sector-ic' && ((options || {}).common || {})[id]) || ((options || {})[metric] || {})[id] ||
+        ((options || {}).common || {})[id];
+      if (!source) throw new Error('缺少 pyecharts 图表配置：'+id);
+      // Python owns chart data, series, axes, styling and controls. Only fixed
+      // rendering callbacks are added here; no JsCode or dynamic code is run.
+      const option = JSON.parse(JSON.stringify(source));
+      const tooltip = Array.isArray(option.tooltip) ? option.tooltip[0] : option.tooltip;
+      const ratio=['coverage','quantile-turnover'].includes(id);
+      const correlation=['ic-timeline','ic-cumulative','factor-autocorrelation','sector-ic'].includes(id);
+      const format=value => {const number=tooltipNumber(value);return ratio ? (finite(number) ? fmt(number*100,1)+'%' : '—') : fmt(number,correlation ? 4 : 2);};
+      if (tooltip) {tooltip.renderMode='richText';tooltip.confine=true;tooltip.valueFormatter=format;}
+      (option.series || []).forEach(series => {if (series.tooltip && typeof series.tooltip === 'object') {
+        series.tooltip.renderMode='richText';series.tooltip.confine=true;series.tooltip.valueFormatter=format;
+      }});
+      const axes=Array.isArray(option.yAxis) ? option.yAxis : [option.yAxis];
+      if (!['ic-monthly','ic-qq','ic-histogram'].includes(id)) axes.forEach(axis => {if (axis && axis.axisLabel) axis.axisLabel.formatter=format;});
+      if (id === 'quantile-distribution') attachReturnDistribution(option,tooltip);
+      if (['ic-histogram','ic-qq','ic-monthly'].includes(id)) attachInformationCallbacks(id,option,tooltip,metric);
+      if (tooltip && id === 'coverage') attachCoverageTooltip(tooltip);
+      return option;
+    }
+    function disposeCharts() {
+      registry.forEach(entry => {
+        if (observer) observer.unobserve(entry.element);
+        if (resizeObserver) resizeObserver.unobserve(entry.element);
+        if (entry.chart) entry.chart.dispose();
+      });
+      registry.clear();
+      ['return-charts','ic-charts','stability-charts','sector-charts'].forEach(id => el(id).replaceChildren());
+    }
+    function initialize(entry) {
+      if (entry.chart || entry.empty || !entry.element.isConnected) return;
+      try {
+        entry.chart = echarts.init(entry.element,null,{renderer:'canvas'});
+        entry.chart.setOption(entry.option,{notMerge:true,lazyUpdate:false});
+        entry.element.dataset.chartReady = 'true';
+        if (resizeObserver) resizeObserver.observe(entry.element);
+      } catch (error) { message(error); }
+    }
+    function addChart(parent, id, title, options = {}) {
+      const option = chartOption(options.sourceId || id,options.metric || 'ic');
+      const card = node('article','card'+(options.wide ? ' wide' : ''));
+      const header = node('div','card-head');
+      header.append(node('h3','',title));
+      const chartElement = node('div','chart'+(options.tall ? ' tall' : '')+(options.compact ? ' compact' : ''));
+      chartElement.id = 'chart-'+id;
+      if (options.height) chartElement.style.height=String(options.height)+'px';
+      chartElement.setAttribute('role','img');
+      chartElement.setAttribute('aria-label',title);
+      chartElement.dataset.chartId = id;
+      card.append(header,chartElement);
+      el(parent).append(card);
+      const entry = {element:chartElement,chart:null,option,empty:options.empty === true};
+      registry.set(id,entry);
+      if (entry.empty) {
+        const text = node('div','chart-message');
+        text.append(node('strong','','暂无有效图表数据'),node('span','',options.emptyText || '当前筛选下的统计值为空，或计算条件未满足。'));
+        chartElement.append(text);
+        chartElement.dataset.chartReady = 'empty';
+      } else if (observer) observer.observe(chartElement);
+      else initialize(entry);
+    }
+    function makeTable(parent, title, columns, rows, className = '') {
+      const card = node('article','card table-card '+className);
+      const header = node('div','card-head');
+      header.append(node('h3','',title));
+      const wrap = node('div','table-wrap');
+      const table = node('table');
+      const thead = node('thead');
+      const tr = node('tr');
+      columns.forEach(column => tr.append(node('th',column === selectedHorizon+' 日' ? 'selected-cell' : '',column)));
+      thead.append(tr);
+      const tbody = node('tbody');
+      rows.forEach(row => {
+        const line = node('tr',row.selected ? 'selected' : '');
+        row.cells.forEach((cell,index) => line.append(node('td',columns[index] === selectedHorizon+' 日' ? 'selected-cell' : '',cell)));
+        tbody.append(line);
+      });
+      table.append(thead,tbody);
+      wrap.append(table);
+      card.append(header,wrap);
+      parent.append(card);
+    }
+    function renderMetrics() {
+      const current=factor(), tables=el('metric-tables');
+      tables.replaceChildren();
+      const metrics=el('performance-metrics'), performance=horizon().performance || {};
+      metrics.replaceChildren();
+      [
+        ['factor_return','因子收益',true],
+        ['sharpe','夏普比率'],
+        ['annualized_return','年化收益',true],
+        ['max_drawdown','最大回撤',true],
+        ['ic_mean','IC_mean'],
+        ['rank_ic_mean','Rank_IC'],
+        ['ic_std','IC_std'],
+        ['ic_ir','IC_IR'],
+        ['rank_ic_ir','IR'],
+        ['ic_negative_rate','P(IC<-0.02)',true],
+        ['ic_positive_rate','P(IC>0.02)',true],
+        ['ic_t_stat','t-统计量'],
+        ['ic_p_value','p-value'],
+        ['monotonicity','单调性']
+      ].forEach(([key,label,isPercent]) => {
+        const item=node('article','performance-metric');
+        item.dataset.metricKey=key;
+        item.append(node('h3','',label),node('div','performance-value',
+          isPercent ? performancePercent(performance[key]) : fmt(performance[key],4)));
+        metrics.append(item);
+      });
+      const horizons=payload.meta.horizons, heads=['指标',...horizons.map(h => h+' 日')];
+      const cells=(label,getter) => ({cells:[label,...horizons.map(h => getter(h))]});
+      const summary=h => current.summary.find(item => item.horizon === h) || {};
+      makeTable(tables,'换手与覆盖',heads,[
+        cells('顶组平均换手率',h => percent(summary(h).top_turnover)),
+        cells('底组平均换手率',h => percent(summary(h).bottom_turnover)),
+        cells('平均因子自相关',h => fmt(summary(h).autocorrelation,4)),
+        cells('因子有效覆盖率',h => percent(summary(h).coverage)),
+        cells('有效配对覆盖率',h => percent(summary(h).pair_coverage)),
+        cells('信号日期数',h => integer(summary(h).dates))
+      ]);
+    }
+    function tooltipDateIndex(params, dates) {
+      const points=Array.isArray(params) ? params : [params];
+      for (const point of points) {
+        if (!point) continue;
+        const name=point.axisValue !== undefined ? point.axisValue :
+          (Array.isArray(point.value) ? point.value[0] : point.name);
+        const found=dates.indexOf(String(name));
+        if (found >= 0) return found;
+      }
+      const point=points.find(value => value && value.seriesType === 'line') || points[0];
+      return point && Number.isInteger(point.dataIndex) && point.dataIndex >= 0 && point.dataIndex < dates.length ? point.dataIndex : -1;
+    }
+    function pendingNote(current, index) {
+      return (current.daily.pending_forward_return || [])[index] === true ?
+        '前瞻期未齐备：所需未来报价尚未到期'+(payload.meta.price_data_end ? '\n本地报价截至 '+payload.meta.price_data_end : '') : '';
+    }
+    function attachCoverageTooltip(tooltip) {
+      const current=horizon(), dates=current.dates;
+      tooltip.formatter=params => {
+        const index=tooltipDateIndex(params,dates);
+        if (index < 0) return '';
+        const lines=[dates[index]], pending=pendingNote(current,index);
+        const daily=current.daily;
+        lines.push('因子覆盖率 '+percent(daily.coverage[index])+'（'+integer(daily.factor_count[index])+' / '+integer((daily.universe_count || [])[index])+'）',
+          '配对覆盖率 '+percent(daily.pair_coverage[index])+'（'+integer(daily.pair_count[index])+' / '+integer((daily.universe_count || [])[index])+'）',
+          '有效前瞻收益 '+integer((daily.label_count || [])[index])+' 个标的',
+          '因子有效但收益缺失 '+integer((daily.missing_label_count || [])[index])+' 个标的');
+        if (!pending && (daily.missing_label_count || [])[index] > 0) lines.push('报价端点不可用\n真实缺失保留，不进行平滑');
+        if (pending) lines.push(pending);
+        return lines.join('\n');
+      };
+    }
+    function attachReturnDistribution(option,tooltip) {
+      const items = horizon().quantiles.map(item => ({...item,
+        box_bps:Array.isArray(item.box_bps) && item.box_bps.length === 5 && item.box_bps.every(finite) ? item.box_bps : null,
+        violin:(item.violin || []).filter(pair => Array.isArray(pair) && finite(pair[0]) && finite(pair[1]) && pair[1] >= 0)}));
+      if (tooltip) tooltip.formatter=params => {
+        const item=items[params.dataIndex], box=item.box_bps;
+        return 'Q'+item.quantile+(box ? '\n最小值 '+bps(box[0])+' bps\n25% '+bps(box[1])+' bps\n中位数 '+bps(box[2])+' bps\n75% '+bps(box[3])+' bps\n最大值 '+bps(box[4])+' bps' : '\n有效样本不足');
+      };
+      (option.series || []).filter(series => series.type === 'custom').forEach(series => {
+        series.renderItem=(_params,api) => {
+          const index=api.value(0), item=items[index], box=item.box_bps, violin=item.violin;
+          if (!box && !violin.length) return;
+          const center=api.coord([index,0])[0], half=Math.abs(api.size([1,0])[0])*.34;
+          const palette=option.color || [];
+          const color=palette.length ? palette[index % palette.length] : '#6476c7';
+          const children=[], maximum=Math.max(0,...violin.map(pair => pair[1]));
+          if (maximum > 0 && violin.length > 1) {
+            const points=violin.map(([value,density]) => [center-half*density/maximum,api.coord([index,value])[1]]);
+            points.push(...violin.slice().reverse().map(([value,density]) => [center+half*density/maximum,api.coord([index,value])[1]]));
+            children.push({type:'polygon',shape:{points},style:{fill:color,opacity:.43,stroke:color,lineWidth:1}});
+          }
+          if (box) {
+            const low=api.coord([index,box[0]])[1],high=api.coord([index,box[4]])[1];
+            const q1=api.coord([index,box[1]])[1],q3=api.coord([index,box[3]])[1],middle=api.coord([index,box[2]])[1];
+            const width=maximum > 0 ? 7 : Math.max(9,half*.75);
+            children.push({type:'line',shape:{x1:center,y1:low,x2:center,y2:high},style:{stroke:color,lineWidth:1}},
+              {type:'rect',shape:{x:center-width/2,y:Math.min(q1,q3),width,height:Math.max(1,Math.abs(q1-q3))},style:{fill:color,stroke:color,opacity:.9}},
+              {type:'line',shape:{x1:center-width/2,y1:middle,x2:center+width/2,y2:middle},style:{stroke:'#fff',lineWidth:1.5}},
+              {type:'line',shape:{x1:center-3,y1:low,x2:center+3,y2:low},style:{stroke:color,lineWidth:1}},
+              {type:'line',shape:{x1:center-3,y1:high,x2:center+3,y2:high},style:{stroke:color,lineWidth:1}});
+          }
+          return {type:'group',children};
+        };
+      });
+    }
+    function attachInformationCallbacks(id,option,tooltip,metric) {
+      const label=correlationLabel(metric), current=horizon();
+      const distribution=metric === 'ic' ? current.ic_distribution : current.rank_ic_distribution;
+      if (id === 'ic-histogram') {
+        if (tooltip) tooltip.formatter=item => label+' '+fmt(item.value[0],4)+'\n日期数 '+integer(item.value[1]);
+        (option.series || []).filter(series => series.type === 'custom').forEach(series => {
+          series.renderItem=(params,api) => {
+            const begin=api.coord([api.value(2),0]),end=api.coord([api.value(3),api.value(1)]);
+            const rect=echarts.graphic.clipRectByRect({x:begin[0]+.5,y:end[1],width:Math.max(.5,end[0]-begin[0]-1),height:begin[1]-end[1]},
+              {x:params.coordSys.x,y:params.coordSys.y,width:params.coordSys.width,height:params.coordSys.height});
+            return rect ? {type:'rect',shape:rect,style:api.style()} : null;
+          };
+        });
+      } else if (id === 'ic-qq') {
+        if (tooltip) tooltip.formatter=item => '正态分位数 '+fmt(item.value[0],3)+'\n观测 '+label+' '+fmt(item.value[1],4);
+      } else if (id === 'ic-monthly') {
+        const monthly=distribution.monthly;
+        if (tooltip) tooltip.formatter=item => String(monthly.years[item.value[1]])+' 年 '+String(monthly.months[item.value[0]])+' 月\n平均 '+label+' '+fmt(item.value[2],4);
+        (option.series || []).filter(series => series.type === 'heatmap').forEach(series => {
+          if (series.label) series.label.formatter=item => fmt(item.value[2],4);
+        });
+        const maps=Array.isArray(option.visualMap) ? option.visualMap : [option.visualMap];
+        maps.forEach(map => {if (map) map.formatter=value => fmt(value,2);});
+      }
+    }
+    function renderReturns() {
+      const current=horizon();
+      addChart('return-charts','mean-quantile','分组平均期收益',
+        {empty:!payload.meta.horizons.some(h => horizon(h).quantiles.some(item => finite(item.mean_return_bps)))});
+      addChart('return-charts','quantile-distribution','分组期收益分布',
+        {empty:!current.quantiles.some(item => (item.box_bps && item.box_bps.every(finite)) || (item.violin || []).some(pair => finite(pair[0]) && finite(pair[1])))});
+      addChart('return-charts','quantile-cumulative','分组期收益累计',
+        {empty:!current.quantiles.some(item => hasValues(item.cumulative_bps))});
+      addChart('return-charts','coverage','数据覆盖率',
+        {empty:!hasValues(current.daily.coverage) && !hasValues(current.daily.pair_coverage)});
+    }
+    function renderInformation() {
+      const current=horizon();
+      const addPair=(id,title,settings) => ['ic','rank_ic'].forEach(metric => {
+        const distribution=metric === 'ic' ? current.ic_distribution : current.rank_ic_distribution;
+        addChart('ic-charts',id+'-'+metric,title(metric),{...settings(distribution,metric),sourceId:id,metric});
+      });
+      addPair('ic-timeline',metric => correlationLabel(metric),
+        (_distribution,metric) => ({empty:!hasValues(current.daily[metric])}));
+      addPair('ic-cumulative',metric => correlationLabel(metric)+' 算术累计',
+        (_distribution,metric) => ({empty:!hasValues(current.daily[metric+'_cumulative'])}));
+      addPair('ic-histogram',metric => correlationLabel(metric)+' 分布',
+        distribution => ({empty:!distribution.histogram.length}));
+      addPair('ic-qq',metric => correlationLabel(metric)+' · 正态 Q–Q',
+        distribution => ({empty:!distribution.qq.length}));
+      addPair('ic-monthly',metric => correlationLabel(metric)+' 月度均值',
+        distribution => ({height:Math.min(1100,Math.max(270,distribution.monthly.years.length*25+130)),
+          empty:!distribution.monthly.values.some(item => finite(item[2]))}));
+    }
+    function renderStability() {
+      const current=factor();
+      addChart('stability-charts','quantile-turnover','顶底组换手率',
+        {empty:!hasValues(current.turnover.top) && !hasValues(current.turnover.bottom)});
+      addChart('stability-charts','factor-autocorrelation','因子自相关',
+        {empty:!hasValues(current.autocorrelation.values)});
+    }
+    function renderSectors() {
+      const data=horizon().sector;
+      el('sector-empty').hidden=Boolean(data && data.available);
+      if (!data || !data.available) return;
+      addChart('sector-charts','sector-ic','行业内信息系数',
+        {wide:true,tall:true,empty:!data.overview.some(item => finite(item.ic_mean) || finite(item.rank_ic_mean))});
+      data.quantile_returns.forEach((item,index) => {
+        addChart('sector-charts','sector-'+index,item.name,
+          {empty:!item.groups.some(group => finite(group.mean_return_bps))});
+      });
+    }
+    function render() {
+      disposeCharts();
+      renderMetrics();
+      renderReturns();
+      renderInformation();
+      renderStability();
+      renderSectors();
+      document.title=factor().name+' · '+payload.meta.title;
+    }
+    function chooseHorizon(value) {
+      const numeric=Number(value);
+      if (!payload.meta.horizons.includes(numeric)) throw new Error('无效前瞻收益周期');
+      selectedHorizon=numeric;
+      el('horizon-select').value=String(numeric);
+      render();
+    }
+    function chooseFee(value) {
+      const key=String(value);
+      if (!feeOptions().some(option => option.value === key)) throw new Error('无效手续费选项');
+      if (key !== 'none' && payload.meta.horizons.some(h => !(rawHorizon(h).fee_scenarios || {})[key])) throw new Error('缺少手续费场景数据');
+      selectedFee=key;
+      el('fee-select').value=key;
+      render();
+    }
+    try {
+      payload = JSON.parse(el('report-data').textContent);
+      if (payload.factors.length !== 1 || !payload.meta.horizons.length) throw new Error('报告应仅包含一个因子及有效前瞻收益周期');
+      if (typeof echarts === 'undefined') throw new Error('ECharts 资源未加载');
+      selectedHorizon = payload.meta.horizons[0];
+      selectedFee = 'none';
+      el('report-title').textContent = factor().name;
+      if ((payload.meta.licenses || []).length) {
+        el('licenses').hidden=false;
+        payload.meta.licenses.forEach(item => {
+          el('license-content').append(node('h3','',item.name),
+            node('pre','',(item.source ? 'Source: '+item.source+'\n\n' : '')+(item.license || '')+'\n\n'+(item.notice || '')));
+        });
+      }
+      payload.meta.horizons.forEach(value => {
+        const option=node('option','',value+' 日持有期');
+        option.value=String(value);
+        el('horizon-select').append(option);
+      });
+      feeOptions().forEach(value => {
+        const option=node('option','',value.label);
+        option.value=value.value;
+        el('fee-select').append(option);
+      });
+      el('fee-select').value=selectedFee;
+      if ('IntersectionObserver' in window) {
+        observer=new IntersectionObserver(entries => entries.forEach(entry => {
+          if (!entry.isIntersecting) return;
+          const descriptor=registry.get(entry.target.dataset.chartId);
+          if (descriptor) initialize(descriptor);
+          observer.unobserve(entry.target);
+        }),{rootMargin:'200px'});
+      }
+      if ('ResizeObserver' in window) resizeObserver=new ResizeObserver(entries => entries.forEach(entry => {
+        const descriptor=registry.get(entry.target.dataset.chartId);
+        if (descriptor && descriptor.chart) descriptor.chart.resize();
+      }));
+      else window.addEventListener('resize',() => registry.forEach(entry => {if (entry.chart) entry.chart.resize();}));
+      el('horizon-select').addEventListener('change',event => chooseHorizon(event.target.value));
+      el('fee-select').addEventListener('change',event => chooseFee(event.target.value));
+      window.addEventListener('beforeprint',() => registry.forEach(initialize));
+      window.reportApp = {
+        selectHorizon:chooseHorizon,
+        selectFee:chooseFee,
+        renderAll:() => {registry.forEach(initialize);return registry.size;},
+        getState:() => ({factor:factor().name,horizon:selectedHorizon,fee:selectedFee,metrics:['ic','rank_ic'],plottingLibrary:'pyecharts',
+          chartCount:registry.size,initializedCharts:[...registry.values()].filter(entry => entry.chart).length,
+          emptyCharts:[...registry.values()].filter(entry => entry.empty).length,chartIds:[...registry.keys()],errors:errors.slice()}),
+        getChartOption:id => {const entry=registry.get(id);return entry ? (entry.chart ? entry.chart.getOption() : entry.option) : null;}
+      };
+      render();
+      document.documentElement.dataset.reportReady='true';
+    } catch (error) { message(error);document.documentElement.dataset.reportReady='error'; }
+  }());
+  </script>
+</body>
+</html>

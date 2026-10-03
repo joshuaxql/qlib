@@ -60,14 +60,28 @@ class TopkStrategy:
         if features.empty:
             return pd.DataFrame(index=dates[::self.rebalance], dtype=float)
         scores = features[self.score].unstack("instrument").reindex(dates)
-        weights = pd.DataFrame(0.0, index=dates[::self.rebalance], columns=sorted(scores.columns))
-        for date in weights.index:
+        selected_dates, columns = dates[::self.rebalance], sorted(scores.columns)
+        column_index = pd.Index(columns)
+        values = scores.reindex(index=selected_dates, columns=columns).to_numpy()
+        weights = np.zeros(values.shape, dtype=float)
+        for position, row in enumerate(values):
             # Stable code ordering gives reproducible tie-breaking.
-            ranked = scores.loc[date].reindex(weights.columns).replace([np.inf, -np.inf], np.nan).dropna()
-            selected = ranked.sort_values(ascending=self.ascending, kind="stable").head(self.topk).index
+            if values.dtype.kind in "fiub":
+                valid = np.flatnonzero(np.isfinite(row))
+                ranked = row[valid]
+                if not self.ascending:
+                    # Bitwise complement reverses integer order without losing
+                    # precision above 2**53 or overflowing the minimum integer.
+                    ranked = ~ranked if values.dtype.kind in "iub" else -ranked
+                selected = valid[np.argsort(ranked, kind="stable")[:self.topk]]
+            else:
+                # Custom/nullable provider values retain the pandas contract.
+                ranked = pd.Series(row, index=columns).replace([np.inf, -np.inf], np.nan).dropna()
+                selected = column_index.get_indexer(ranked.sort_values(
+                    ascending=self.ascending, kind="stable").head(self.topk).index)
             if len(selected):
-                weights.loc[date, selected] = self.risk_degree / len(selected)
-        return weights
+                weights[position, selected] = self.risk_degree / len(selected)
+        return pd.DataFrame(weights, index=selected_dates, columns=columns)
 
 
 @dataclass(kw_only=True)
@@ -182,15 +196,21 @@ class TopkDropoutStrategy:
             return [], []
         last = scores.reindex(sorted(holdings)).sort_values(ascending=False, kind="stable").index
 
-        def eligible(codes):
-            return [code for code in codes if not self.only_tradable or is_tradable(code)]
+        def eligible(codes, limit=None):
+            selected = []
+            for code in codes:
+                if limit is not None and len(selected) >= limit:
+                    break
+                if not self.only_tradable or is_tradable(code):
+                    selected.append(code)
+            return selected
 
         count = max(0, self.n_drop + self.topk - len(last))
         ranked = scores.sort_values(ascending=False, kind="stable").index
         if self.method_buy == "top":
-            today = eligible(ranked[~ranked.isin(last)])[:count]
+            today = eligible(ranked[~ranked.isin(last)], count)
         else:
-            candidates = [code for code in eligible(ranked)[:self.topk] if code not in last]
+            candidates = [code for code in eligible(ranked, self.topk) if code not in last]
             today = list(rng.choice(candidates, count, replace=False)) if len(candidates) >= count else candidates
         combined = scores.reindex(last.union(pd.Index(today))).sort_values(ascending=False, kind="stable").index
         if self.n_drop == 0:

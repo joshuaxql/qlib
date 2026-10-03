@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77", "wheel>=0.45"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,7 +17,7 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "pandas>=2.0", "scipy>=1.10", "joblib>=1.3", "loguru>=0.7"]
+dependencies = ["numpy>=1.24", "pandas>=2.0", "scipy>=1.10", "joblib>=1.3", "loguru>=0.7", "pyecharts>=2.1,<3"]
 
 [project.urls]
 Documentation = "https://qlib-joshuaxql.readthedocs.io/"
@@ -37,9 +37,10 @@ include = ["qlib*"]
 namespaces = false
 
 [tool.setuptools.exclude-package-data]
-"*" = ["*.dll", "*.so", "*.pyd", "*.pyc"]
+"*" = ["*.dll", "*.so", "*.dylib", "*.pyd", "*.pyc"]
 
 [tool.setuptools.package-data]
 "qlib.data._libs" = ["*.c", "*.h", "LICENSE"]
 "qlib.contrib.eva" = ["LICENSE"]
 "qlib.contrib.strategy" = ["LICENSE"]
+"qlib.contrib.report.analysis_model" = ["_assets/*.html", "_assets/*.js", "_assets/*.txt", "_assets/*.json"]

@@ -4,6 +4,7 @@
 价格不复权，成交量为手，市值为万元；股票目录保留大写代码并兼容小写路径。
 """
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -12,6 +13,7 @@ import pandas as pd
 from loguru import logger
 
 from qlib.log import log_warning, summarize_warnings
+from qlib.data.data import _industry_name_map
 from scripts import config as C
 from scripts.tushare.data import index_month_ranges
 
@@ -107,17 +109,20 @@ def merge_daily(daily, factor, basic, limits):
     return frame[keys + list(DAILY_FIELDS)]
 
 
-def write_intervals(path, rows, calendar):
-    """将闭区间对齐交易日并合并；仅明确开放的行业区间保留 2099-12-31。"""
-    ranges = []
+def _trading_ranges(rows, calendar):
+    """Project closed membership intervals onto the actual output calendar."""
     for code, start, end in rows:
         start, end = pd.Timestamp(start), pd.Timestamp(end)
         left = int(calendar.searchsorted(start))
         right = int(calendar.searchsorted(end, side="right")) - 1
         if left <= right and left < len(calendar):
-            ranges.append((code, left, right, end == pd.Timestamp("2099-12-31")))
+            yield code, left, right, end == pd.Timestamp("2099-12-31")
+
+
+def write_intervals(path, rows, calendar):
+    """将闭区间对齐交易日并合并；仅明确开放的行业区间保留 2099-12-31。"""
     merged = []
-    for code, left, right, opened in sorted(set(ranges)):
+    for code, left, right, opened in sorted(set(_trading_ranges(rows, calendar))):
         if merged and merged[-1][0] == code and left <= merged[-1][2] + 1:
             previous = merged[-1]
             merged[-1] = (code, previous[1], max(right, previous[2]), opened or previous[3])
@@ -128,6 +133,28 @@ def write_intervals(path, rows, calendar):
         f"{'2099-12-31' if opened else iso_date(calendar[right])}"
         for code, left, right, opened in merged
     ))
+
+
+def _validate_industry_intervals(rows_by_industry, calendar):
+    """Reject cross-L1 overlaps in O(R log R) time and O(R) storage.
+
+    Same-industry intervals may overlap or touch. Only trading-day coverage
+    matters: weekend-only intersections cannot affect the built memberships.
+    """
+    ranges = sorted((code, left, right, industry)
+                    for industry, rows in rows_by_industry.items()
+                    for code, left, right, _ in _trading_ranges(rows, calendar))
+    previous_code, previous_industry, previous_end = None, None, -1
+    for code, left, right, industry in ranges:
+        if code == previous_code and left <= previous_end:
+            if industry != previous_industry:
+                end = min(right, previous_end)
+                raise ValueError(f"Cross-industry membership overlap for {code}: "
+                                 f"{previous_industry} and {industry}, "
+                                 f"{iso_date(calendar[left])} to {iso_date(calendar[end])}")
+            previous_end = max(previous_end, right)
+        else:
+            previous_code, previous_industry, previous_end = code, industry, right
 
 
 def build_all(root, basic, calendar):
@@ -260,9 +287,11 @@ def build_industry(client, root, basic, calendar):
     ], ignore_index=True)
     if classifications.empty:
         raise ValueError("申万一级行业列表为空")
+    names = _industry_name_map(classifications)
     stocks = basic.set_index("ts_code")
     industries = sorted(set(classifications.index_code))
     logger.info("构建历史行业成分：{} 个行业", len(industries))
+    rows_by_industry = {}
     for industry in industries:
         rows = []
         for status in ("N", "Y"):
@@ -274,8 +303,8 @@ def build_industry(client, root, basic, calendar):
                     raise ValueError(f"{industry}/{item.ts_code} 缺少行业纳入日期")
                 start = max(pd.Timestamp(item.in_date), stocks.at[item.ts_code, "list_date"])
                 if pd.notna(item.out_date) and item.out_date:
-                    # 剔除日不再属于该行业，转换为包含两端的区间。
-                    end = pd.Timestamp(item.out_date) - pd.Timedelta(days=1)
+                    # out_date is the last membership date, included in output.
+                    end = pd.Timestamp(item.out_date)
                 elif item.is_new == "Y":
                     end = pd.Timestamp("2099-12-31")
                 else:
@@ -284,4 +313,23 @@ def build_industry(client, root, basic, calendar):
                 if pd.notna(delisted):
                     end = min(end, delisted)
                 rows.append((item.ts_code, start, end))
+        rows_by_industry[industry] = rows
+    # Validate the complete projected classification before writing any files.
+    _validate_industry_intervals(rows_by_industry, calendar)
+    for industry, rows in rows_by_industry.items():
         write_intervals(root / "industry" / f"{industry}.txt", rows, calendar)
+    if names:
+        catalog = pd.DataFrame(sorted(names.items()), columns=["index_code", "industry_name"])
+        path = root / "industry" / "names.csv"
+        temporary = path.with_suffix(".csv.tmp")
+        catalog.to_csv(temporary, index=False, encoding="utf-8")
+        temporary.replace(path)
+    path = root / "industry_names.json"
+    temporary = path.with_suffix(".json.tmp")
+    catalog = {
+        "schema_version": 1,
+        "source": {"kind": "index_classify", "level": "L1", "sources": ["SW2014", "SW2021"]},
+        "names": dict(sorted(names.items())),
+    }
+    temporary.write_text(json.dumps(catalog, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    temporary.replace(path)

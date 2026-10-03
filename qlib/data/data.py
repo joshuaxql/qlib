@@ -1,9 +1,10 @@
 """Local data provider and the shared D facade."""
 
 from copy import copy
+import csv
 from functools import lru_cache
+import json
 from pathlib import Path
-import ast
 import re
 
 import numpy as np
@@ -32,6 +33,66 @@ def date_slice(index, start=None, end=None):
     if start is not None and end is not None and pd.Timestamp(start) > pd.Timestamp(end):
         raise ValueError("start_time must not be after end_time")
     return index[left:right]
+
+
+def _industry_name_map(frame):
+    """Validate static classification labels without using stock snapshots."""
+    if "industry_name" not in frame:
+        return {}
+    if "index_code" not in frame:
+        raise ValueError("Invalid industry name catalog: missing index_code")
+    names = {}
+    for code, name in frame[["index_code", "industry_name"]].itertuples(index=False, name=None):
+        if not isinstance(code, str) or not isinstance(name, str):
+            raise ValueError("Invalid industry name catalog: codes and names must be strings")
+        code, name = component(code).upper(), name.strip()
+        if not name:
+            raise ValueError(f"Invalid industry name catalog: empty name for {code}")
+        if code in names and names[code] != name:
+            raise ValueError(f"Conflicting industry names for {code}: {names[code]!r}, {name!r}")
+        names[code] = name
+    return names
+
+
+def _industry_name_json(path):
+    """Read the dataset-owned catalog without accepting ambiguous JSON keys."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Duplicate industry name catalog key: {key!r}")
+            result[key] = value
+        return result
+
+    def invalid_constant(value):
+        raise ValueError(f"Invalid JSON constant: {value}")
+
+    try:
+        catalog = json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=unique_object,
+                             parse_constant=invalid_constant)
+    except (ValueError, UnicodeError) as error:
+        raise ValueError(f"Invalid industry name catalog: {path}: {error}") from error
+    if (not isinstance(catalog, dict) or type(catalog.get("schema_version")) is not int
+            or catalog["schema_version"] != 1 or not isinstance(catalog.get("names"), dict)
+            or ("source" in catalog and not isinstance(catalog["source"], dict))):
+        raise ValueError(f"Invalid industry name catalog schema: {path}")
+    return _industry_name_map(pd.DataFrame(catalog["names"].items(), columns=["index_code", "industry_name"]))
+
+
+def _industry_name_csv(path):
+    """Validate row widths instead of letting CSV index inference discard data."""
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as stream:
+            rows = list(csv.reader(stream, strict=True))
+    except (csv.Error, UnicodeError) as error:
+        raise ValueError(f"Invalid industry name catalog: {path}: {error}") from error
+    if (not rows or len(rows[0]) != len(set(rows[0]))
+            or not {"index_code", "industry_name"}.issubset(rows[0])):
+        raise ValueError(f"Invalid industry name catalog: {path}")
+    header, records = rows[0], [row for row in rows[1:] if row]
+    if any(len(row) != len(header) for row in records):
+        raise ValueError(f"Invalid industry name catalog row: {path}")
+    return _industry_name_map(pd.DataFrame(records, columns=header))
 
 
 class LocalProvider:
@@ -88,19 +149,26 @@ class LocalProvider:
         return view
 
     def _expression_frame(self, code, fields, dates, history, allow_future):
-        from .base import ExpressionEngine, validate
+        from .base import ExpressionEngine, daily_fields, history_bounds
+
+        bounds = history_bounds(fields, allow_future)
 
         def evaluate(provider, output_dates, evaluation_history):
+            direct = provider._direct_daily_frame(code, fields, output_dates)
+            if direct is not None:
+                return direct
+            if bounds is not None and len(output_dates):
+                left, right = bounds
+                first = max(0, evaluation_history.searchsorted(output_dates[0]) - left)
+                stop = min(len(evaluation_history), evaluation_history.searchsorted(output_dates[-1], side="right") + right)
+                evaluation_history = evaluation_history[first:stop]
             engine = ExpressionEngine(provider, code, evaluation_history, allow_future)
             engine.prepare(fields)
             return pd.DataFrame({field: engine.evaluate(field).reindex(output_dates) for field in fields})
 
         if self.adjust != "qfq" or not getattr(self, "_signal_causal", False) or dates.empty:
             return evaluate(self, dates, history)
-        price_dependent = any(
-            isinstance(node, ast.Call) and node.func.id == "field" and node.args[0].value in PRICE_FIELDS
-            for field in fields for node in ast.walk(validate(field, allow_future))
-        )
+        price_dependent = any(daily_fields(field, allow_future).intersection(PRICE_FIELDS) for field in fields)
         if not price_dependent:
             return evaluate(self, dates, history)
         # A fixed qfq anchor rescales the entire expression history, including
@@ -117,6 +185,53 @@ class LocalProvider:
             view = self._price_view(end_time=end)
             frames.append(evaluate(view, group.index, self.calendar(end_time=end)))
         return pd.concat(frames).reindex(dates)
+
+    def _direct_daily_frame(self, code, fields, dates):
+        """Project ordinary daily fields with one shared price-factor transform."""
+        if (getattr(self._field, "__func__", None) is not LocalProvider._field or
+                getattr(self._read_daily, "__func__", None) is not LocalProvider._read_daily):
+            # Provider extensions retain the expression engine's field hook.
+            return None
+        names = []
+        for expression in fields:
+            if not re.fullmatch(r"\$[A-Za-z_][A-Za-z_0-9]*", expression):
+                return None
+            name = expression[1:]
+            if name in ("is_st", "list_days"):
+                return None
+            names.append(name)
+        calendar = self._calendar(False)
+        raw = {name: self._daily(code, name) for name in names}
+        if any(value.dtype != np.dtype("float64") or not value.index.equals(calendar) for value in raw.values()):
+            return None
+        positions = calendar.get_indexer(dates)
+        if np.any(positions < 0):
+            return None
+        values = np.empty((len(dates), len(names)), dtype=float)
+        price_columns = [column for column, name in enumerate(names) if name in PRICE_FIELDS]
+        factor = None
+        if price_columns and self.adjust != "none":
+            series = raw.get("factor")
+            if series is None:
+                series = self._daily(code, "factor")
+            if series.dtype != np.dtype("float64") or not series.index.equals(calendar):
+                return None
+            all_factors = series.to_numpy()
+            valid = np.isfinite(all_factors) & (all_factors > 0)
+            factor = np.where(valid[positions], all_factors[positions], np.nan)
+            if self.adjust == "qfq":
+                stop = len(calendar) if self._adjustment_end is None else calendar.searchsorted(
+                    self._adjustment_end, side="right")
+                known = np.flatnonzero(valid[:stop])
+                anchor = all_factors[known[-1]] if len(known) else np.nan
+                # Match _field's operation order: normalize factors first.
+                factor = factor / anchor
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            for column, name in enumerate(names):
+                selected = raw[name].to_numpy()[positions]
+                values[:, column] = selected * factor if factor is not None and name in PRICE_FIELDS else selected
+        values[~np.isfinite(values)] = np.nan
+        return pd.DataFrame(values, index=dates, columns=fields)
 
     @staticmethod
     def _frequency(freq):
@@ -157,6 +272,21 @@ class LocalProvider:
     def industries(self):
         return sorted(p.stem for p in (self.root / "industry").glob("*.txt"))
 
+    def industry_names(self):
+        """Static industry-code labels; historical membership stays in .txt files.
+
+        The dataset's industry_names.json is authoritative. Old directories
+        may use industry/names.csv; missing labels fall back to their codes.
+        Labels are reread on every call and never come from another dataset.
+        """
+        path = self.root / "industry_names.json"
+        if path.exists():
+            names = _industry_name_json(path)
+        else:
+            legacy = self.root / "industry" / "names.csv"
+            names = _industry_name_csv(legacy) if legacy.exists() else {}
+        return {code: names.get(component(code).upper(), code) for code in self.industries()}
+
     @staticmethod
     def instruments(market="all", filter_pipe=None):
         return {"market": market, "filter_pipe": list(filter_pipe or [])}
@@ -181,10 +311,18 @@ class LocalProvider:
             if unknown:
                 raise KeyError(f"Unknown instruments: {sorted(unknown)}")
             intervals = {code: full[code] for code in codes}
-        mask = pd.DataFrame(False, index=dates, columns=sorted(intervals), dtype=bool)
-        for code, spans in intervals.items():
+        columns = sorted(intervals)
+        values = np.zeros((len(dates), len(columns)), dtype=bool)
+        for column, code in enumerate(columns):
+            spans = intervals[code]
             for start, end in spans:
-                mask.loc[(dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end)), code] = True
+                start, end = pd.Timestamp(start), pd.Timestamp(end)
+                if pd.isna(start) or pd.isna(end):
+                    continue
+                left = dates.searchsorted(start)
+                right = dates.searchsorted(end, side="right")
+                values[left:right, column] = True
+        mask = pd.DataFrame(values, index=dates, columns=columns)
         if filters:
             from .filter import make_filter
             for item in filters:
@@ -193,6 +331,8 @@ class LocalProvider:
 
     def list_instruments(self, instruments="all", start_time=None, end_time=None, freq="day", as_list=False, *, adjust=None):
         mask = self.universe(instruments, start_time, end_time, freq, adjust=adjust)
+        if as_list:
+            return mask.columns[mask.any(axis=0)].tolist()
         result = {}
         for code in mask:
             values = mask[code].to_numpy()
@@ -200,7 +340,7 @@ class LocalProvider:
             spans = [(mask.index[a], mask.index[b - 1]) for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))]
             if spans:
                 result[code] = spans
-        return list(result) if as_list else result
+        return result
 
     def _stock_path(self, section, code, filename):
         code = normalize_code(code)

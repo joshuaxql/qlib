@@ -1,46 +1,29 @@
-"""Build the pure C rolling/expanding/PIT DLLs using MinGW-w64 GCC, never MSVC.
+"""Build the pure C rolling/expanding/PIT libraries for the current platform.
 
 Usage: python scripts/build_rolling.py --cc D:/software/mingw64/bin/gcc.exe
+Windows requires MinGW-w64 GCC; Linux uses GCC and macOS uses Clang.
 """
 
 import argparse
 from pathlib import Path
-import shutil
-import struct
-import subprocess
 import sys
 
-from loguru import logger
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from build_native import NativeBuildError, build_libraries  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cc", default="gcc", help="MinGW-w64 GCC executable (default: gcc on PATH)")
-    parser.add_argument("--only", choices=("rolling", "expanding", "pit"), help="Build just one DLL (default: all)")
+    parser.add_argument("--cc", help="Compiler executable (default: QLIB_CC / CC / platform compiler)")
+    parser.add_argument("--only", choices=("rolling", "expanding", "pit"), help="Build one library (default: all)")
+    parser.add_argument("--output-dir", type=Path, help="Output directory (default: qlib/data/_libs)")
     args = parser.parse_args()
-    compiler = shutil.which(args.cc)
-    if compiler is None:
-        parser.error(f"MinGW-w64 GCC not found: {args.cc}")
-    target = subprocess.check_output([compiler, "-dumpmachine"], text=True).strip()
-    version = subprocess.check_output([compiler, "--version"], text=True).splitlines()[0]
-    if "mingw32" not in target or "gcc" not in version.lower():
-        parser.error(f"MinGW-w64 GCC is required; got {version} ({target})")
-    architecture = "x86_64" if struct.calcsize("P") == 8 else "i686"
-    if not target.startswith(architecture + "-"):
-        parser.error(f"Compiler target {target} does not match this Python ({architecture})")
-    if sys.platform != "win32":
-        parser.error("Run this MinGW DLL build with Windows Python")
     directory = Path(__file__).resolve().parents[1] / "qlib" / "data" / "_libs"
-    logger.info("原生编译开始：{}，目标={}", version, target)
-    for name in ((args.only,) if args.only else ("rolling", "expanding", "pit")):
-        output = directory / f"{name}.dll"
-        command = [
-            compiler, "-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-pedantic",
-            "-fno-fast-math", "-ffp-contract=off", "-shared", "-static-libgcc",
-            str(directory / f"{name}.c"), "-o", str(output), "-lm",
-        ]
-        subprocess.run(command, check=True)
-        logger.info("DLL 构建完成：{}", output)
+    options = {"names": (args.only,)} if args.only else {}
+    try:
+        build_libraries(directory, args.output_dir or directory, cc=args.cc, **options)
+    except NativeBuildError as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":

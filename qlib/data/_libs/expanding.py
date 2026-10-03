@@ -7,12 +7,13 @@ Only NaN is treated as missing by the low-level API.
 
 import ctypes
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 
+from ._path import library_path
 
-LIBRARY_PATH = Path(__file__).with_name("expanding.dll")
+
+LIBRARY_PATH = library_path("expanding")
 __all__ = ["expanding_mean", "expanding_slope", "expanding_rsquare", "expanding_resi",
            "expanding_corr", "expanding_cov"]
 
@@ -26,7 +27,7 @@ def is_available():
 def _library():
     if not is_available():
         raise ImportError(
-            "C expanding library is missing; run python scripts/build_rolling.py --only expanding with MinGW-w64"
+            "C expanding library is missing; install a platform wheel or run python scripts/build_rolling.py --only expanding"
         )
     library = ctypes.CDLL(str(LIBRARY_PATH))
     array = np.ctypeslib.ndpointer(dtype=np.float64, ndim=1, flags=("C_CONTIGUOUS", "ALIGNED"))

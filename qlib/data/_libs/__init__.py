@@ -1,1 +1,1 @@
-"""Native numerical kernels, built with MinGW-w64 on Windows."""
+"""ABI-independent C numerical kernels for Windows, Linux and macOS."""

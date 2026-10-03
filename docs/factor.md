@@ -75,7 +75,8 @@ result.save("outputs/factor_analysis")
 | `calculate_forward_returns(factors, horizons=(1,5,20), *, provider=None, price='open', entry_lag=1, adjust=None)` | 输入因子表索引；返回以正整数持有期为列的收益标签表 |
 | `analyze_factors(factors, forward_returns, *, quantiles=5, min_samples=2, turnover_lag=1)` | 分析已有因子与标签，返回 FactorAnalysisResult |
 | `factor_analysis(..., winsorize='std', neutralize=True, standardize=True)` | 因子计算后默认依次去极值、中性化、标准化，再生成标签并评估，返回 FactorAnalysisResult |
-| `FactorAnalysisResult.save(directory)` | 导出 8 张 CSV 和 config.json |
+| `FactorAnalysisResult.save(directory, *, html=True, title=None, industries=None, provider=None)` | 每个因子建立子文件夹，分别导出 8 张 CSV、config.json 和 report.html；html=False 只导出数据表 |
+| `FactorAnalysisResult.to_html(path, *, factor=None, title=None, industries=None, provider=None)` | 单独导出一个因子的离线 pyecharts HTML，返回 pathlib.Path；多因子结果用 factor 指定名称 |
 
 `provider=None` 使用全局 D，`adjust=None` 继承 provider 复权配置。因子表索引为 `(instrument, datetime)`，因子列名为非空字符串；标签列为正整数持有期。
 `calculate_factors` 和 `factor_analysis` 的 qfq 因子按各信号日已知的复权因子锚计算；延长查询终点或加入未来拆股，不改变早期因子及排名。普通 `provider.features` 查询继续使用查询终点的前复权锚，收益标签继续按两个端点的调整价格比计算。
@@ -247,7 +248,94 @@ return(t,h) = price(t + entry_lag + h) / price(t + entry_lag) - 1
 turnover_lag 按输入日期序列计数，自相关采用相同 lag。
 多日标签存在重叠，分组收益样本不直接连乘为可交易组合净值。
 
-### 结果对象
+### 交互式 HTML 报告
+
+`result.save("outputs/factor_analysis")` 为每个因子分别创建文件夹。例如 BP 与 momentum20：
+
+```text
+outputs/factor_analysis/
+├── BP/
+│   ├── report.html
+│   ├── config.json
+│   └── factors.csv、forward_returns.csv、summary.csv 等 8 张表
+└── momentum20/
+    ├── report.html
+    ├── config.json
+    └── 该因子的 8 张表
+```
+
+每份报告只包含一个因子，页面采用白底表格与图表，IC 和 RankIC 同时展示。
+浏览器打开 `report.html` 即可使用，没有因子和 IC 口径切换。
+图表使用 pyecharts 在 Python 端构建，浏览器由 ECharts 渲染，不使用 matplotlib。
+pyecharts 是项目依赖，正常安装项目即可使用。报告内嵌 ECharts 和汇总数据，
+支持离线查看、持有期与手续费切换、图例筛选、图表缩放和 PNG 导出。
+悬浮提示统一四舍五入：收益基点 2 位、IC/RankIC 4 位、比例百分数 1 位；CSV 和图表底层数据保留完整精度。
+
+```python
+# 已有分析结果可单独导出，无需重算因子或收益标签。
+path = result.to_html("outputs/BP.html", title="BP 因子研究")
+
+# 多因子对象导出单份 HTML 时，明确选择因子。
+path = result.to_html("outputs/BP.html", factor="BP")
+
+# 批量研究仅需 CSV 时，保留轻量导出方式。
+result.save("outputs/factor_tables", html=False)
+
+# 外部因子可提供股票到行业的映射；历史行业变化可用
+# (instrument, datetime) MultiIndex 的 Series 按日期对齐。
+result.to_html("outputs/custom.html", industries={"000001.SZ": "银行"})
+```
+
+报告包含绩效指标、换手与覆盖表格、分组收益柱状图与小提琴/箱线分布、分组累计收益、
+IC/RankIC 时序与累计值、分布、Q–Q、月度热图、换手率、自相关和行业分析。
+页面标题和图表标题下不显示说明小字，报告界面不展示计算口径。
+导出过程不再计算因子加权收益、Alpha/Beta 或顶底组期收益差。
+`factor_analysis()` 使用本地数据提供器时，导出时自动读取该目录中的历史行业归属。
+单独 `analyze_factors()` 的结果可通过 `to_html(..., provider=provider)` 指定数据源，
+或用 `industries` 提供分类；两者互斥。没有行业数据时明确显示缺失。
+
+收益图使用所选手续费下的持有期收益，单位为基点（1 bp = 0.01%），不折算每日收益。
+分组分布展示每日组均值的分布，分组均值按有效日期等权汇总。
+分组累计收益及 IC/RankIC 累计值采用有效日值的**算术累加**，缺失日期保持空值。
+多日分组收益存在重叠，分组累计图用于因子诊断，不能解读为可交易净值。
+
+绩效展示所选持有期的 14 个指标：因子收益、夏普比率、年化收益、最大回撤、
+IC_mean、Rank_IC、IC_std、IC_IR、IR（RankIC_IR）、P(IC<-0.02)、P(IC>0.02)、
+t-统计量、p-value 和单调性。收益与概率显示百分数，底层数据为比例。
+
+收益类绩效使用最高分位组的等权期间收益，5 个分组时为 Q5。
+分组成员在信号日确定，组均值沿用 `quantile_returns.mean`，忽略该期缺失的收益标签。
+从研究首日锚定、每隔持有期对应的交易日数采样，避免把重叠期间收益当成日收益年化；
+本地提供器使用完整交易日历，外部结果未指定提供器时使用报告日期序列。
+整期缺失不改变采样锚点，只从已观测采样期的收益统计和有效持有时间中排除。
+这些指标是已观测分组收益的诊断，未包含成交约束。
+
+手续费选项默认为“无”，也可选择“3‱佣金 + 1‰印花税”。
+佣金按买入和卖出成交金额各收 0.0003，印花税仅按卖出成交金额收 0.001。
+沿用每个持有期完整买卖一次的分组收益模拟，买入资金包含佣金；
+若原始期间收益为 `r`，净期间收益为
+`(1 + r) * (1 - 0.0003 - 0.001) / (1 + 0.0003) - 1`。
+费用按每次完整买卖扣除，不除以持有期，也不根据日频成员换手率缩减。
+收益绩效、分组收益图和行业分组收益图同步切换，IC/RankIC、覆盖率和换手统计保持原值。
+该选项不计最低佣金、滑点或成交限制；切换仅影响 HTML 展示，不修改因子、原始收益标签和 CSV。
+
+因子收益为有效采样期的复利累计收益；年化按每年 252 个交易日和有效持有时间计算。
+夏普比率使用零无风险收益、样本标准差以及 `sqrt(252 / horizon)` 年化系数。
+最大回撤包含初始净值 1，并显示为正幅度；低于 -100% 的期间收益不能建立复利序列，
+该持有期的四个收益绩效指标保留空值。
+IC_std 为样本标准差，IC_IR 和 RankIC_IR 均不年化；概率使用严格大于/小于阈值。
+t-统计量和双侧 p-value 基于日 IC 的单样本 t 检验，未作序列相关调整；
+尤其多日 IC 存在重叠，显著性应结合该限制解读。
+单调性为分组序号与各组有效日期等权平均收益之间的 Spearman 相关，保留方向符号。
+覆盖率悬停显示研究池总数、有效因子数和有效收益配对数；真实缺失不插补。
+使用本地数据提供器导出时，收益配对率尾部还会说明未来报价未到期和本地数据截止日。
+行业收益沿用全市场分位组，行业 IC 在行业内计算，图表通过 `industry_names()` 读取当前数据目录
+根目录的 `industry_names.json` 并显示中文名称；旧目录兼容 `industry/names.csv`。
+计算仍按行业代码分组，名称相同的代码不会合并。每个因子的文件夹仅保存其因子列及对应指标，
+收益标签按研究股票池和全部持有期保留；config 保存原分析参数。导出不修改内存中的批量分析结果。
+不适用于 Windows 文件名的字符会替换，并附加稳定摘要以避免名称冲突。
+
+### 结果对象与数据表
 
 | 属性 / CSV | 索引与内容 |
 |---|---|
