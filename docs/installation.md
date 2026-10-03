@@ -16,6 +16,7 @@ python -m pip install qlib-joshuaxql
 ```
 
 [PyPI 项目页面](https://pypi.org/project/qlib-joshuaxql/) 提供版本信息、wheel 和源码压缩包。
+当前版本 **0.3.0** 提供五个平台预编译 wheel，以及由同一版本源码生成的新源码包（sdist）。
 平台 wheel 内置 rolling、expanding 和 PIT 三个预编译库，提供数据读取、因子分析和日频回测。
 覆盖 Windows x86_64、Linux x86_64/aarch64 和 macOS arm64/x86_64；pip 自动选择兼容的平台文件。
 Linux wheel 采用 `manylinux_2_17` / `manylinux2014` 标签；macOS 的最低系统版本以最终 wheel 的 `macosx_*` 标签为准。
@@ -41,14 +42,7 @@ Loguru 随核心包自动安装；日志仅保留关键事件，不再依赖 tqd
 wheel 提供 `qlib` 库与 C 源文件；运行本页及其他指南中的 `scripts/`、`tests/`、`docs/` 命令，
 请使用 Git 仓库或 PyPI 源码压缩包的根目录。
 
-0.2.0 原先发布的通用 wheel 和源码包保留；新增平台 wheel 使用不同文件名。
-如果已安装旧通用 wheel，仅执行升级会保留同版本安装。重新安装可选择新平台文件：
-
-```bash
-python -m pip install --upgrade --force-reinstall qlib-joshuaxql==0.2.0
-```
-
-已有满足要求的依赖时可加 `--no-deps`，避免重新安装 NumPy 等依赖。
+从 0.2.0 升级到 0.3.0 时，使用上方普通升级命令即可；pip 自动选择兼容的平台 wheel。
 
 ## 从项目源码安装
 

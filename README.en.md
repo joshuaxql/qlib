@@ -24,7 +24,7 @@ Qlib is a Python library for local stock-market quantitative research. It covers
 
 ### 1. Install
 
-Requires **Python 3.10+**. Install from PyPI:
+The current version is **0.3.0** and requires **Python 3.10+**. Install from PyPI:
 
 ```bash
 python -m pip install qlib-joshuaxql
@@ -41,11 +41,8 @@ print(qlib.__version__)
 Upgrade with `python -m pip install --upgrade qlib-joshuaxql`. A dedicated virtual environment is recommended.
 The PyPI package supports data reading, factor computation, and backtesting; market and financial datasets are obtained separately.
 Matching platform wheels include precompiled libraries for Windows x86_64, Linux x86_64/aarch64, and macOS arm64/x86_64. No compiler is needed to install a platform wheel.
-If you already installed the older 0.2.0 universal wheel, reinstall the same version to obtain a matching platform wheel:
-
-```bash
-python -m pip install --upgrade --force-reinstall qlib-joshuaxql==0.2.0
-```
+Version 0.3.0 provides these five precompiled platform wheels and a new source distribution (sdist) built from the same version's source.
+Existing 0.2.0 users can update with the standard upgrade command above.
 
 To run the `scripts/` data maintenance, native compilation, or local documentation commands below, first obtain and install the source.
 Source builds require a C compiler: MinGW-w64 GCC on Windows, GCC on Linux, or Clang on macOS.

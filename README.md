@@ -24,7 +24,7 @@ Qlib 是面向本地股票量化研究的 Python 工具库，覆盖行情与财�
 
 ### 1. 安装
 
-需要 **Python 3.10+**。从 PyPI 安装：
+当前版本为 **0.3.0**，需要 **Python 3.10+**。从 PyPI 安装：
 
 ```bash
 python -m pip install qlib-joshuaxql
@@ -41,11 +41,8 @@ print(qlib.__version__)
 升级时使用 `python -m pip install --upgrade qlib-joshuaxql`。建议使用独立虚拟环境。
 PyPI 安装即可读取数据、计算因子和运行回测；行情与财务数据需单独准备。
 匹配的平台 wheel 包含预编译数值库：Windows x86_64、Linux x86_64/aarch64、macOS arm64/x86_64，安装时不需要编译器。
-已安装旧版 0.2.0 通用 wheel 时，可重新安装同版本以获取平台 wheel：
-
-```bash
-python -m pip install --upgrade --force-reinstall qlib-joshuaxql==0.2.0
-```
+0.3.0 提供这五个平台的预编译 wheel，以及由同一版本源码生成的新源码包（sdist）。
+已安装 0.2.0 的用户使用上方普通升级命令即可更新。
 
 运行下文的 `scripts/` 数据维护、原生编译或本地文档构建命令时，请先获取源码并安装。
 源码构建需要对应的 C 编译器：Windows 使用 MinGW-w64 GCC，Linux 使用 GCC，macOS 使用 Clang。

@@ -4,6 +4,7 @@
 C 头文件不使用 Python 或 NumPy C API，因此 wheel 标签为 `py3-none-<平台>`；
 Python 最低版本由包元数据中的 `Requires-Python >=3.10` 限制。
 每个目标平台只构建一个 wheel，并用多个 Python 版本验证同一文件。
+**0.3.0** 发行包含五个平台的预编译 wheel 和一个新源码包（sdist），全部使用同一版本、同一 Git 提交的源码。
 
 ## 构建目标
 
@@ -63,15 +64,16 @@ Python 回退会使验证失败。Windows 验证时移除编译器目录的 PATH
 ## 上传经过验证的文件
 
 工作流只上传 Actions artifacts。维护者检查源码提交、SHA256 和验证 JSON 后，
-在自己的发布环境使用 PyPI 凭据上传下载的 wheel：
+检出 artifacts 对应的同一 Git 提交，构建 0.3.0 源码包；在自己的发布环境使用 PyPI 凭据一起上传：
 
 ```bash
-python -m twine check "native-dist/*/*.whl"
-python -m twine upload "native-dist/*/*.whl"
+python -m build --sdist --outdir source-dist
+python -m twine check "native-dist/*/*.whl" "source-dist/*.tar.gz"
+python -m twine upload "native-dist/*/*.whl" "source-dist/*.tar.gz"
 ```
 
-0.2.0 已发布的 `py3-none-any` wheel 与源码包保留；平台 wheel 使用不同文件名追加至同一版本。
-PyPI 已存在的文件名不能覆盖。已安装旧通用 wheel 的用户按[安装指南](installation.md)重新安装同版本。
+0.2.0 已发布的历史文件保留；0.3.0 使用新的版本文件名，并包含与五个平台 wheel 一致的新源码包。
+PyPI 已存在的文件名不能覆盖。已有安装按[安装指南](installation.md)执行普通 pip 升级即可更新至 0.3.0。
 
 ## 官方工具资料
 
