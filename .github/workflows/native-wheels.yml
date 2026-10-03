@@ -20,10 +20,10 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.10'
           architecture: x64
@@ -58,7 +58,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Wheel installation failed' }
           python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python310.json
           if ($LASTEXITCODE -ne 0) { throw 'Installed native validation failed' }
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.14'
           architecture: x64
@@ -74,7 +74,7 @@ jobs:
           $hash = Get-FileHash -LiteralPath $wheel -Algorithm SHA256
           ($hash.Hash.ToLower() + '  ' + (Split-Path -Leaf $wheel)) | Set-Content -LiteralPath wheelhouse/SHA256SUMS -Encoding utf8
           $env:GITHUB_SHA | Set-Content -LiteralPath wheelhouse/source-commit.txt -Encoding utf8
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: native-wheel-windows-x86_64
           path: wheelhouse/
@@ -96,7 +96,7 @@ jobs:
             python_arch: arm64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Build, audit and repair inside manylinux
@@ -115,7 +115,7 @@ jobs:
               /opt/python/cp310-cp310/bin/python -m twine check wheelhouse/*.whl
               /opt/python/cp310-cp310/bin/python -c "from pathlib import Path; p=list(Path(\"wheelhouse\").glob(\"*.whl\")); assert len(p)==1 and \"-py3-none-manylinux_\" in p[0].name, p"
             '
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.10'
           architecture: ${{ matrix.python_arch }}
@@ -124,7 +124,7 @@ jobs:
         run: |
           python -m pip install --force-reinstall wheelhouse/*.whl
           python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python310.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.14'
           architecture: ${{ matrix.python_arch }}
@@ -135,7 +135,7 @@ jobs:
           python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python314.json
           sha256sum wheelhouse/*.whl | sed 's|wheelhouse/||' > wheelhouse/SHA256SUMS
           printf '%s\n' "$GITHUB_SHA" > wheelhouse/source-commit.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: native-wheel-linux-${{ matrix.arch }}
           path: wheelhouse/
@@ -161,10 +161,10 @@ jobs:
       ARCHFLAGS: -arch ${{ matrix.arch }}
       MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.11'
           architecture: ${{ matrix.python_arch }}
@@ -179,7 +179,7 @@ jobs:
           python -c "from pathlib import Path; p=list(Path('wheelhouse').glob('*.whl')); assert len(p)==1 and '-py3-none-macosx_' in p[0].name and p[0].name.endswith('_${{ matrix.arch }}.whl'), p"
           python -m pip install --force-reinstall wheelhouse/*.whl
           python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python311.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.14'
           architecture: ${{ matrix.python_arch }}
@@ -190,7 +190,7 @@ jobs:
           python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python314.json
           shasum -a 256 wheelhouse/*.whl | sed 's|wheelhouse/||' > wheelhouse/SHA256SUMS
           printf '%s\n' "$GITHUB_SHA" > wheelhouse/source-commit.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: native-wheel-macos-${{ matrix.arch }}
           path: wheelhouse/

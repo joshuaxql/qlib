@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,6 +12,24 @@ import build_native
 
 
 class NativeBuildTests(unittest.TestCase):
+    def test_setup_metadata_with_isolated_python_and_no_compiler(self):
+        repository = Path(__file__).resolve().parents[1]
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        environment["QLIB_CC"] = "missing-qlib-test-compiler"
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                [sys.executable, "-I", str(repository / "setup.py"), "egg_info", "--egg-base", temporary],
+                cwd=repository,
+                env=environment,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((Path(temporary) / "qlib_joshuaxql.egg-info" / "PKG-INFO").is_file())
+
     def test_platform_suffix_and_unsupported_platform(self):
         for platform_name, suffix in (("win32", ".dll"), ("linux", ".so"), ("darwin", ".dylib")):
             with self.subTest(platform=platform_name):

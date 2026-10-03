@@ -1,0 +1,2 @@
+# Preserve the offline report assets and their provenance hashes on every runner.
+qlib/contrib/report/analysis_model/_assets/* -text
