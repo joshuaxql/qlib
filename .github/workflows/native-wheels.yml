@@ -3,6 +3,9 @@ run-name: Native wheels ${{ github.ref_name }} @ ${{ github.sha }}
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/native-wheels
 
 permissions:
   contents: read

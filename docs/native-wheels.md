@@ -34,7 +34,8 @@ python -m build
 ## 手动运行 GitHub Actions
 
 工作流为 `.github/workflows/native-wheels.yml`，名称为 **Native wheels**。
-仅由 `workflow_dispatch` 触发，无自定义输入，所选 Git ref 决定构建源码。
+支持 `workflow_dispatch`，无自定义输入，所选 Git ref 决定构建源码。
+`codex/native-wheels` 特性分支推送时也会构建，用于合并前验证平台产物。
 工作流文件需先位于仓库默认分支；也可用 GitHub CLI 指定待构建分支：
 
 ```bash
