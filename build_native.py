@@ -39,6 +39,14 @@ def library_suffix(platform_name: str | None = None) -> str:
     raise NativeBuildError(f"Native wheels are not supported on platform {name!r}")
 
 
+def library_filename(library: str, platform_name: str | None = None) -> str:
+    name = sys.platform if platform_name is None else platform_name
+    # 'rolling.so' would shadow rolling.py as a CPython extension module. These
+    # libraries expose a plain C ABI and must only be loaded through ctypes.
+    prefix = "lib" if name.startswith("linux") else ""
+    return prefix + library + library_suffix(name)
+
+
 def macos_architectures() -> tuple[str, ...]:
     """Architectures compiled into the dylibs, independent of Python's slices."""
     arguments = shlex.split(os.environ.get("ARCHFLAGS", ""))
@@ -166,7 +174,7 @@ def build_libraries(
 ) -> list[Path]:
     """Compile fresh libraries; never reuse binaries from a source checkout."""
     name = sys.platform if platform_name is None else platform_name
-    suffix = library_suffix(name)
+    library_suffix(name)
     if not names or any(item not in LIBRARIES for item in names):
         raise NativeBuildError(f"Unknown native library selection: {names!r}")
     source_directory = Path(source_directory).resolve()
@@ -184,7 +192,7 @@ def build_libraries(
             source = source_directory / (item + ".c")
             if not source.is_file():
                 raise NativeBuildError(f"Missing C source: {source}")
-            temporary_output = staging_directory / (item + suffix)
+            temporary_output = staging_directory / library_filename(item, name)
             command = compile_command(compiler, source, temporary_output, name)
             try:
                 subprocess.run(command, check=True)
@@ -193,7 +201,7 @@ def build_libraries(
             if not temporary_output.is_file():
                 raise NativeBuildError(f"Compiler did not produce {temporary_output.name}")
         for item in names:
-            destination = output_directory / (item + suffix)
+            destination = output_directory / library_filename(item, name)
             (staging_directory / destination.name).replace(destination)
             outputs.append(destination)
             print(f"Built {destination}", flush=True)

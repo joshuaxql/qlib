@@ -34,6 +34,9 @@ class NativeBuildPy(build_py):
                 stale = directory / (name + suffix)
                 if stale.is_file():
                     stale.unlink()
+            stale = directory / ("lib" + name + ".so")
+            if stale.is_file():
+                stale.unlink()
         build_libraries(Path(__file__).resolve().parent / "qlib" / "data" / "_libs", directory)
 
 

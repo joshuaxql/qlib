@@ -37,6 +37,13 @@ class NativeBuildTests(unittest.TestCase):
         with self.assertRaisesRegex(build_native.NativeBuildError, "not supported"):
             build_native.library_suffix("freebsd14")
 
+    def test_linux_library_names_cannot_shadow_python_wrappers(self):
+        for name in build_native.LIBRARIES:
+            with self.subTest(library=name):
+                self.assertEqual(build_native.library_filename(name, "linux"), "lib" + name + ".so")
+                self.assertEqual(build_native.library_filename(name, "darwin"), name + ".dylib")
+                self.assertEqual(build_native.library_filename(name, "win32"), name + ".dll")
+
     def test_missing_compiler_fails_instead_of_using_checkout_binary(self):
         with patch("build_native.shutil.which", return_value=None):
             with self.assertRaisesRegex(build_native.NativeBuildError, "cannot be built"):
@@ -138,6 +145,11 @@ class NativeBuildTests(unittest.TestCase):
             self.assertEqual(build_native.native_wheel_platform_tag("linux_aarch64", "linux"), "linux_aarch64")
 
     def test_every_library_is_freshly_compiled(self):
+        for platform_name in ("win32", "linux", "darwin"):
+            with self.subTest(platform=platform_name):
+                self._check_every_library_is_freshly_compiled(platform_name)
+
+    def _check_every_library_is_freshly_compiled(self, platform_name):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, output = root / "src", root / "out"
@@ -154,10 +166,18 @@ class NativeBuildTests(unittest.TestCase):
 
             with patch("build_native._compiler_command", return_value=["gcc"]):
                 with patch("build_native._compiler_identity", return_value=("x86_64-w64-mingw32", "gcc")):
-                    with patch("build_native.subprocess.run", side_effect=compile_to_output):
-                        libraries = build_native.build_libraries(source, output, platform_name="win32")
+                    with (
+                        patch("build_native.subprocess.run", side_effect=compile_to_output),
+                        patch.dict(os.environ, {"ARCHFLAGS": "-arch x86_64"}),
+                    ):
+                        libraries = build_native.build_libraries(source, output, platform_name=platform_name)
             self.assertEqual(len(calls), 3)
-            self.assertEqual({item.name for item in libraries}, {name + ".dll" for name in build_native.LIBRARIES})
+            expected_names = {
+                "win32": {"rolling.dll", "expanding.dll", "pit.dll"},
+                "linux": {"librolling.so", "libexpanding.so", "libpit.so"},
+                "darwin": {"rolling.dylib", "expanding.dylib", "pit.dylib"},
+            }
+            self.assertEqual({item.name for item in libraries}, expected_names[platform_name])
             self.assertTrue(all(item.read_bytes() == b"freshly compiled" for item in libraries))
             self.assertFalse(list(output.glob(".qlib-native-*")))
 
