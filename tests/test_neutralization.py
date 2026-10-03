@@ -172,7 +172,7 @@ class NeutralizationTest(unittest.TestCase):
         pd.testing.assert_frame_equal(result.forward_returns, raw.forward_returns)
         self.assertIsNone(raw.config["neutralization"])
         result.save(self.root / "report")
-        config = json.loads((self.root / "report/config.json").read_text())
+        config = json.loads((self.root / "report/alpha/config.json").read_text())
         self.assertEqual(config["neutralization"], {"method": "industry_log_market_cap", "market_cap": "total_mv", "min_samples": 3})
         with self.assertRaises(ValueError):
             factor_analysis(self.codes, "$score", neutralize="yes", **options)
@@ -211,7 +211,7 @@ class NeutralizationTest(unittest.TestCase):
                                     mad_scale=1, neutralize=True, standardize=True)
         pd.testing.assert_frame_equal(direct, result.factors)
         result.save(self.root / "processed-report")
-        config = json.loads((self.root / "processed-report/config.json").read_text())
+        config = json.loads((self.root / "processed-report/alpha/config.json").read_text())
         self.assertEqual(config["preprocessing"], {
             "order": ["winsorize", "neutralize", "standardize"],
             "winsorization": {"method": "mad", "n": 2.0, "mad_scale": 1.0},

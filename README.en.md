@@ -18,13 +18,13 @@ Qlib is a Python library for local stock-market quantitative research. It covers
 | Factor preprocessing | Mean/std and median/MAD winsorization, Z-score standardization, and a combined winsorization–neutralization–standardization pipeline |
 | Factor evaluation | IC, RankIC, ICIR, long-short returns, autocorrelation, quantile returns, and turnover; multi-factor, multi-horizon analysis and report export |
 | Strategies and backtesting | `TopkStrategy`, `TopkDropoutStrategy`, and `WeightStrategy`; daily execution, fees, slippage, price limits, volume constraints, and position reports |
-| Native acceleration | Pure C rolling, expanding, and PIT query kernels, built with MinGW-w64 and accessed through NumPy / ctypes |
+| Native acceleration | Windows, Linux, and macOS platform wheels include pure C rolling, expanding, and PIT query kernels accessed through NumPy / ctypes |
 
 ## Usage
 
 ### 1. Install
 
-Requires **Python 3.10+**. Install from PyPI:
+The current version is **0.3.0** and requires **Python 3.10+**. Install from PyPI:
 
 ```bash
 python -m pip install qlib-joshuaxql
@@ -40,8 +40,12 @@ print(qlib.__version__)
 
 Upgrade with `python -m pip install --upgrade qlib-joshuaxql`. A dedicated virtual environment is recommended.
 The PyPI package supports data reading, factor computation, and backtesting; market and financial datasets are obtained separately.
+Matching platform wheels include precompiled libraries for Windows x86_64, Linux x86_64/aarch64, and macOS arm64/x86_64. No compiler is needed to install a platform wheel.
+Version 0.3.0 provides these five precompiled platform wheels and a new source distribution (sdist) built from the same version's source.
+Existing 0.2.0 users can update with the standard upgrade command above.
 
-To run the `scripts/` data maintenance, native compilation, or local documentation commands below, first obtain and install the source:
+To run the `scripts/` data maintenance, native compilation, or local documentation commands below, first obtain and install the source.
+Source builds require a C compiler: MinGW-w64 GCC on Windows, GCC on Linux, or Clang on macOS.
 
 ```powershell
 git clone https://github.com/joshuaxql/qlib.git
@@ -52,7 +56,7 @@ python -m venv .venv
 
 For data reading, factor analysis, and backtesting only, install with `-e .`. On Linux/macOS, use `.venv/bin/python` as the Python executable.
 
-On Windows, optionally build the C kernels using **MinGW-w64 GCC** with the same architecture as Python:
+After changing the C sources, rebuild the three libraries. Windows uses **MinGW-w64 GCC** with the same architecture as Python:
 
 ```powershell
 # When GCC is on PATH
@@ -62,7 +66,9 @@ On Windows, optionally build the C kernels using **MinGW-w64 GCC** with the same
 .venv\Scripts\python.exe scripts/build_rolling.py --cc D:/software/mingw64/bin/gcc.exe
 ```
 
-The PyPI wheel does not include precompiled DLLs. Expression evaluation and PIT queries use pandas/NumPy fallbacks when the DLLs are unavailable. See the [installation guide](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/installation.html) for environment and build details.
+On Linux/macOS, run `.venv/bin/python scripts/build_rolling.py`. Native libraries use `.dll`, `.so`, and `.dylib`, respectively.
+They are loaded through ctypes without a CPython or NumPy C ABI dependency, so one `py3-none` wheel serves each platform.
+See the [installation guide](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/installation.html) and [native wheel builds](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/native-wheels.html) for platform requirements, fallbacks, and verification.
 
 ### 2. Prepare data
 
@@ -74,6 +80,7 @@ Download `cn_data.zip` from the [Hugging Face dataset](https://huggingface.co/da
 ├─ features/
 ├─ instruments/
 ├─ industry/
+├─ industry_names.json
 ├─ financial/
 └─ stock_basic.csv
 ```

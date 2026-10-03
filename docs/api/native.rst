@@ -20,6 +20,8 @@ PIT 输入日期为 uint32，starts/counts 为 uint64；每组日期有序。
 返回 int64 记录位置数组，取公告日期不晚于 asof 的最后版本，不存在则为 -1。
 
 原生构建方式见 :doc:`../installation`。头文件不依赖 Python 或 NumPy C ABI。
+Windows、Linux、macOS 平台 wheel 分别内置 DLL、SO、dylib，并通过 ctypes 加载。
+多平台构建与安装后数值验证见 :doc:`../native-wheels`。
 
 Rolling C 接口
 --------------

@@ -2,7 +2,7 @@
 
 from .data import D, LocalProvider
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def init(provider_uri="~/.qlib/qlib_data/cn_data", **kwargs):

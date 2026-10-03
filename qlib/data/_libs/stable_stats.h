@@ -12,6 +12,14 @@ typedef struct {
     double x_anchor, y_anchor, x_offset, y_offset, xx, yy, xy;
 } moments;
 
+static double rescale_moment(double value, int shift)
+{
+    /* Equal exponents need no libm call. Preserve the original scalbn path
+     * for every nonzero shift, including subnormal/overflow handling.
+     */
+    return shift == 0 ? value : scalbn(value, shift);
+}
+
 static moments observation(double x, double y, int time_axis)
 {
     moments result = {0};
@@ -46,14 +54,14 @@ static moments combine(moments a, moments b)
     result.infinity = a.infinity | b.infinity;
     result.x_exponent = a.x_exponent > b.x_exponent ? a.x_exponent : b.x_exponent;
     result.y_exponent = a.y_exponent > b.y_exponent ? a.y_exponent : b.y_exponent;
-    ax = scalbn(a.x_anchor, a.x_exponent - result.x_exponent);
-    ay = scalbn(a.y_anchor, a.y_exponent - result.y_exponent);
-    bx = scalbn(b.x_anchor, b.x_exponent - result.x_exponent);
-    by = scalbn(b.y_anchor, b.y_exponent - result.y_exponent);
-    amx = scalbn(a.x_offset, a.x_exponent - result.x_exponent);
-    amy = scalbn(a.y_offset, a.y_exponent - result.y_exponent);
-    bmx = scalbn(b.x_offset, b.x_exponent - result.x_exponent);
-    bmy = scalbn(b.y_offset, b.y_exponent - result.y_exponent);
+    ax = rescale_moment(a.x_anchor, a.x_exponent - result.x_exponent);
+    ay = rescale_moment(a.y_anchor, a.y_exponent - result.y_exponent);
+    bx = rescale_moment(b.x_anchor, b.x_exponent - result.x_exponent);
+    by = rescale_moment(b.y_anchor, b.y_exponent - result.y_exponent);
+    amx = rescale_moment(a.x_offset, a.x_exponent - result.x_exponent);
+    amy = rescale_moment(a.y_offset, a.y_exponent - result.y_exponent);
+    bmx = rescale_moment(b.x_offset, b.x_exponent - result.x_exponent);
+    bmy = rescale_moment(b.y_offset, b.y_exponent - result.y_exponent);
     /* Keep the mean relative to an observed anchor. Reconstructing a large
      * absolute mean here would round away fractional mean increments.
      */
@@ -63,13 +71,13 @@ static moments combine(moments a, moments b)
     result.x_anchor = ax; result.y_anchor = ay;
     result.x_offset = amx + dx * fraction;
     result.y_offset = amy + dy * fraction;
-    result.xx = scalbn(a.xx, 2 * (a.x_exponent - result.x_exponent)) +
-                scalbn(b.xx, 2 * (b.x_exponent - result.x_exponent)) + dx * dx * weight;
-    result.yy = scalbn(a.yy, 2 * (a.y_exponent - result.y_exponent)) +
-                scalbn(b.yy, 2 * (b.y_exponent - result.y_exponent)) + dy * dy * weight;
-    result.xy = scalbn(a.xy, a.x_exponent + a.y_exponent -
+    result.xx = rescale_moment(a.xx, 2 * (a.x_exponent - result.x_exponent)) +
+                rescale_moment(b.xx, 2 * (b.x_exponent - result.x_exponent)) + dx * dx * weight;
+    result.yy = rescale_moment(a.yy, 2 * (a.y_exponent - result.y_exponent)) +
+                rescale_moment(b.yy, 2 * (b.y_exponent - result.y_exponent)) + dy * dy * weight;
+    result.xy = rescale_moment(a.xy, a.x_exponent + a.y_exponent -
                             result.x_exponent - result.y_exponent) +
-                scalbn(b.xy, b.x_exponent + b.y_exponent -
+                rescale_moment(b.xy, b.x_exponent + b.y_exponent -
                             result.x_exponent - result.y_exponent) + dx * dy * weight;
     return result;
 }

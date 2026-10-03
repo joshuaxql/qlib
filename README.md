@@ -16,15 +16,15 @@ Qlib 是面向本地股票量化研究的 Python 工具库，覆盖行情与财�
 | 历史过滤 | ST、上市天数、行业、指数成分、可交易性与表达式过滤；支持组合条件 |
 | PIT 财务 | Tushare `fina_indicator` 全部 163 个数值指标；保留公告与修订历史，每股一组 `pit.data` / `pit.index` |
 | 因子预处理 | 均值标准差、中位数 MAD 两种去极值方法，Z-score 标准化；可组合去极值、中性化、标准化 |
-| 因子评估 | IC、RankIC、ICIR、多空收益、自相关、分组收益与换手率；多因子、多持有期分析及报告导出 |
+| 因子评估 | IC、RankIC、ICIR、多空收益、自相关、分组收益与换手率；批量计算后按因子分别导出 CSV 与离线 pyecharts 交互报告 |
 | 策略与回测 | `TopkStrategy`、`TopkDropoutStrategy`、`WeightStrategy`；日频撮合、费用、滑点、涨跌停、成交量约束及持仓报告 |
-| 数值加速 | 纯 C 实现 rolling、expanding 和 PIT 查询核心，使用 MinGW-w64 构建，通过 NumPy / ctypes 调用 |
+| 数值加速 | Windows、Linux、macOS 平台 wheel 内置纯 C rolling、expanding 和 PIT 查询核心，通过 NumPy / ctypes 调用 |
 
 ## 用法
 
 ### 1. 安装
 
-需要 **Python 3.10+**。从 PyPI 安装：
+当前版本为 **0.3.0**，需要 **Python 3.10+**。从 PyPI 安装：
 
 ```bash
 python -m pip install qlib-joshuaxql
@@ -40,8 +40,12 @@ print(qlib.__version__)
 
 升级时使用 `python -m pip install --upgrade qlib-joshuaxql`。建议使用独立虚拟环境。
 PyPI 安装即可读取数据、计算因子和运行回测；行情与财务数据需单独准备。
+匹配的平台 wheel 包含预编译数值库：Windows x86_64、Linux x86_64/aarch64、macOS arm64/x86_64，安装时不需要编译器。
+0.3.0 提供这五个平台的预编译 wheel，以及由同一版本源码生成的新源码包（sdist）。
+已安装 0.2.0 的用户使用上方普通升级命令即可更新。
 
-运行下文的 `scripts/` 数据维护、原生编译或本地文档构建命令时，请先获取源码并安装：
+运行下文的 `scripts/` 数据维护、原生编译或本地文档构建命令时，请先获取源码并安装。
+源码构建需要对应的 C 编译器：Windows 使用 MinGW-w64 GCC，Linux 使用 GCC，macOS 使用 Clang。
 
 ```powershell
 git clone https://github.com/joshuaxql/qlib.git
@@ -52,7 +56,7 @@ python -m venv .venv
 
 仅使用数据读取、因子分析和回测时，可安装 `-e .`。Linux/macOS 对应的 Python 路径为 `.venv/bin/python`。
 
-Windows 下可选编译 C 核心，需要与 Python 位数匹配的 **MinGW-w64 GCC**：
+修改 C 源码后，可重新构建三个数值库。Windows 使用与 Python 架构匹配的 **MinGW-w64 GCC**：
 
 ```powershell
 # GCC 已在 PATH 中时
@@ -62,7 +66,9 @@ Windows 下可选编译 C 核心，需要与 Python 位数匹配的 **MinGW-w64 
 .venv\Scripts\python.exe scripts/build_rolling.py --cc D:/software/mingw64/bin/gcc.exe
 ```
 
-PyPI wheel 不包含预编译 DLL。未构建 DLL 时，表达式计算和 PIT 查询使用 pandas/NumPy 回退。环境与编译说明见[安装指南](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/installation.html)。
+Linux/macOS 使用 `.venv/bin/python scripts/build_rolling.py`。平台库分别为 `.dll`、`.so`、`.dylib`；
+通过 ctypes 调用，不依赖 CPython 或 NumPy C ABI，因此每个平台使用一个 `py3-none` wheel。
+环境、回退及构建验证说明见[安装指南](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/installation.html)和[原生 wheel 构建](https://qlib-joshuaxql.readthedocs.io/zh-cn/latest/native-wheels.html)。
 
 ### 2. 准备数据
 
@@ -74,6 +80,7 @@ PyPI wheel 不包含预编译 DLL。未构建 DLL 时，表达式计算和 PIT �
 ├─ features/
 ├─ instruments/
 ├─ industry/
+├─ industry_names.json
 ├─ financial/
 └─ stock_basic.csv
 ```

@@ -5,6 +5,7 @@ Portfolio returns here are descriptive, not executions.
 """
 
 from collections.abc import Mapping
+from collections import deque
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -15,7 +16,10 @@ import pandas as pd
 from loguru import logger
 
 from qlib.data import D
-from qlib.contrib.eva.alpha import calc_ic, calc_long_short_return, pred_autocorr
+from qlib.contrib.eva.alpha import (
+    calc_ic, calc_long_short_return, pred_autocorr,
+    _array_correlations, _selected_positions, _nan_mean, _rank_values,
+)
 
 
 def _positive_int(value, name, minimum=1):
@@ -355,14 +359,55 @@ class FactorAnalysisResult:
     autocorrelation: pd.DataFrame
     config: dict
 
-    def save(self, directory):
-        """Export all diagnostic tables as CSV and settings as JSON."""
+    def to_html(self, path, *, factor=None, title=None, industries=None, provider=None):
+        """Export one offline pyecharts factor tear sheet.
+
+        Args:
+            path: Destination HTML file; parent directories are created.
+            factor: Factor name to export when this result has multiple factors.
+                Omit for a single-factor result, or use save for batch export.
+            title: Optional report title.
+            industries: Optional instrument-to-sector mapping or a Series
+                indexed by instrument/datetime. Missing sectors remain unknown.
+            provider: Optional provider for signal-date historical industries.
+                Mutually exclusive with industries. LocalProvider-backed
+                factor_analysis results remember their source directory.
+
+        Returns:
+            Path of the standalone HTML. No network access, matplotlib, or
+            changes to the saved factor/return/metric tables are required.
+            Cumulative charts sum valid period returns; overlapping multi-day
+            labels do not become an executed portfolio net value.
+            Performance uses the highest quantile's observed returns at fixed,
+            non-overlapping holding-period intervals. IC cumulative charts sum
+            valid daily ICs without filling missing observations.
+        """
+        from ._factor_report import _write_html
+        return _write_html(self, path, factor=factor, title=title, industries=industries, provider=provider)
+
+    def save(self, directory, *, html=True, title=None, industries=None, provider=None):
+        """Export a folder per factor with eight CSVs, config and report.html.
+
+        Set html=False for the original tables-only export. title, industries
+        and provider configure to_html without changing analysis calculations.
+        """
+        if not isinstance(html, bool):
+            raise ValueError("html must be a bool")
+        if html and industries is not None and provider is not None:
+            raise ValueError("Supply industries or provider, not both")
         directory = Path(directory).expanduser()
         directory.mkdir(parents=True, exist_ok=True)
-        for name in ("factors", "forward_returns", "summary", "daily", "quantile_returns",
-                     "quantile_membership", "turnover", "autocorrelation"):
-            getattr(self, name).to_csv(directory / f"{name}.csv")
-        (directory / "config.json").write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
+        from ._factor_report import _factor_directories, _factor_result
+        for factor, folder_name in _factor_directories(self.factors.columns):
+            selected = _factor_result(self, factor)
+            folder = directory / folder_name
+            folder.mkdir(parents=True, exist_ok=True)
+            for name in ("factors", "forward_returns", "summary", "daily", "quantile_returns",
+                         "quantile_membership", "turnover", "autocorrelation"):
+                getattr(selected, name).to_csv(folder / f"{name}.csv")
+            (folder / "config.json").write_text(json.dumps(selected.config, ensure_ascii=False, indent=2), encoding="utf-8")
+            if html:
+                selected.to_html(folder / "report.html", title=title, industries=industries, provider=provider)
         logger.info("因子分析报告已保存：{}", directory)
 
 
@@ -385,52 +430,73 @@ def analyze_factors(factors, forward_returns, *, quantiles=5, min_samples=2, tur
         raise ValueError("Factor column names must be nonempty strings")
     for horizon in labels.columns:
         _positive_int(horizon, "return horizon")
-    memberships = pd.DataFrame(np.nan, index=factors.index, columns=factors.columns)
-    daily_rows, group_rows, turn_rows, auto_rows = [], [], [], []
     dates = factors.index.get_level_values("datetime").unique().sort_values()
-    for name in factors:
-        official_auto = pred_autocorr(factors[name], lag=turnover_lag)
-        evaluations = {}
-        for horizon in labels:
-            ic, ric = calc_ic(factors[name], labels[horizon])
-            spread, average = calc_long_short_return(factors[name], labels[horizon], quantile=1 / quantiles)
-            evaluations[horizon] = ic, ric, spread, average
-        previous = []
-        for date in dates:
-            values = factors[name].xs(date, level="datetime")
-            groups = _groups(values, quantiles)
-            idx = pd.MultiIndex.from_arrays([values.index, [date] * len(values)], names=factors.index.names)
-            memberships.loc[idx, name] = groups.to_numpy()
-            old_groups = previous[-turnover_lag] if len(previous) >= turnover_lag else None
-            auto_rows.append((name, date, official_auto.loc[date]))
-            for group in range(1, quantiles + 1):
-                current = set(groups.index[groups == group])
-                old = set() if old_groups is None else set(old_groups.index[old_groups == group])
-                turnover = len(current - old) / len(current) if current and old else np.nan
-                turn_rows.append((name, date, group, turnover))
-            previous.append(groups)
-            day_labels = labels.xs(date, level="datetime")
-            for horizon in labels:
-                returns = day_labels[horizon]
-                paired = values.notna() & returns.notna()
+    positions_by_date = factors.groupby(level="datetime").indices
+    data, return_data = factors.to_numpy(), labels.to_numpy()
+    code_ids = np.asarray(factors.index.codes[0])
+    shape = (len(factors.columns), len(labels.columns), len(dates))
+    membership_data = np.full(data.shape, np.nan)
+    daily_data = np.full((*shape, 9), np.nan)
+    group_data = np.full((*shape, quantiles, 3), np.nan)
+    turnover_data = np.full((shape[0], shape[2], quantiles), np.nan)
+    auto_data = np.full((shape[0], shape[2]), np.nan)
+    # Universe returns depend only on labels, not factor validity or membership.
+    averages = labels.groupby(level="datetime").mean().reindex(dates).to_numpy()
+    for factor_column, name in enumerate(factors.columns):
+        auto_data[factor_column] = pred_autocorr(factors[name], lag=turnover_lag).reindex(dates).to_numpy()
+        previous = deque(maxlen=turnover_lag)
+        for day, date in enumerate(dates):
+            positions = positions_by_date[date]
+            values, returns = data[positions, factor_column], return_data[positions]
+            valid = np.isfinite(values)
+            factor_count = int(valid.sum())
+            groups = np.full(len(values), np.nan)
+            if np.unique(values[valid]).size >= quantiles:
+                groups[valid] = np.floor((_rank_values(values[valid]) - 1) * quantiles / factor_count) + 1
+            membership_data[positions, factor_column] = groups
+            group_positions = [np.flatnonzero(groups == group) for group in range(1, quantiles + 1)]
+            current = [code_ids[positions[rows]] for rows in group_positions]
+            old = previous[0] if len(previous) == turnover_lag else None
+            for group, members in enumerate(current):
+                if len(members) and old is not None and len(old[group]):
+                    shared = np.intersect1d(members, old[group], assume_unique=True).size
+                    turnover_data[factor_column, day, group] = (len(members) - shared) / len(members)
+            previous.append(current)
+            # Scores and tie order determine selection once for every horizon.
+            # Future label availability must never replace a selected stock.
+            top = _selected_positions(values, 1 / quantiles, True)
+            bottom = _selected_positions(values, 1 / quantiles, False)
+            for horizon in range(shape[1]):
+                target = returns[:, horizon]
+                paired = valid & ~np.isnan(target)
                 count = int(paired.sum())
-                for group in range(1, quantiles + 1):
-                    sample = returns[(groups == group) & paired]
-                    group_rows.append((name, horizon, date, group, len(sample), sample.mean(), sample.std(ddof=1)))
-                ic, ric, spread, average = evaluations[horizon]
-                daily_rows.append((name, horizon, date, len(values), int(values.notna().sum()), count,
-                                   values.notna().mean(), count / len(values),
-                                   ic.loc[date] if count >= min_samples else np.nan,
-                                   ric.loc[date] if count >= min_samples else np.nan,
-                                   average.loc[date], spread.loc[date]))
-    daily = pd.DataFrame(daily_rows, columns=["factor", "horizon", "datetime", "universe_count", "factor_count",
-                                             "pair_count", "coverage", "pair_coverage", "ic", "rank_ic",
-                                             "universe_return", "long_short_return"]).set_index(["factor", "horizon", "datetime"])
-    grouped = pd.DataFrame(group_rows, columns=["factor", "horizon", "datetime", "quantile", "count", "mean", "std"])
-    grouped = grouped.set_index(["factor", "horizon", "datetime", "quantile"])
-    turnover = pd.DataFrame(turn_rows, columns=["factor", "datetime", "quantile", "turnover"]).set_index(
-        ["factor", "datetime", "quantile"])
-    autocorr = pd.DataFrame(auto_rows, columns=["factor", "datetime", "autocorrelation"]).set_index(["factor", "datetime"])
+                ic, ric = _array_correlations(values, target) if count >= min_samples else (np.nan, np.nan)
+                spread = (_nan_mean(target[top]) - _nan_mean(target[bottom])) / 2
+                daily_data[factor_column, horizon, day] = (
+                    len(values), factor_count, count, factor_count / len(values), count / len(values),
+                    ic, ric, averages[day, horizon], spread)
+                for group, rows in enumerate(group_positions):
+                    sample = target[rows]
+                    sample = sample[~np.isnan(sample)]
+                    group_data[factor_column, horizon, day, group] = (
+                        len(sample), _nan_mean(sample), sample.std(ddof=1) if len(sample) > 1 else np.nan)
+    memberships = pd.DataFrame(membership_data, index=factors.index, columns=factors.columns)
+    daily_index = pd.MultiIndex.from_product([factors.columns, labels.columns, dates],
+                                             names=["factor", "horizon", "datetime"])
+    daily = pd.DataFrame(daily_data.reshape(-1, 9), index=daily_index,
+                         columns=["universe_count", "factor_count", "pair_count", "coverage", "pair_coverage",
+                                  "ic", "rank_ic", "universe_return", "long_short_return"])
+    daily[["universe_count", "factor_count", "pair_count"]] = daily[[
+        "universe_count", "factor_count", "pair_count"]].astype("int64")
+    grouped_index = pd.MultiIndex.from_product([factors.columns, labels.columns, dates, range(1, quantiles + 1)],
+                                               names=["factor", "horizon", "datetime", "quantile"])
+    grouped = pd.DataFrame(group_data.reshape(-1, 3), index=grouped_index, columns=["count", "mean", "std"])
+    grouped["count"] = grouped["count"].astype("int64")
+    turnover_index = pd.MultiIndex.from_product([factors.columns, dates, range(1, quantiles + 1)],
+                                                names=["factor", "datetime", "quantile"])
+    turnover = pd.DataFrame(turnover_data.reshape(-1), index=turnover_index, columns=["turnover"])
+    autocorr_index = pd.MultiIndex.from_product([factors.columns, dates], names=["factor", "datetime"])
+    autocorr = pd.DataFrame(auto_data.reshape(-1), index=autocorr_index, columns=["autocorrelation"])
     summaries = []
     for (name, horizon), frame in daily.groupby(level=["factor", "horizon"], sort=False):
         row = {"factor": name, "horizon": horizon, "dates": len(frame), "coverage": frame.coverage.mean(),
@@ -486,6 +552,12 @@ def factor_analysis(instruments, factors, start_time=None, end_time=None, *, pro
     result.config["neutralization"] = ({"method": "industry_log_market_cap", "market_cap": market_cap,
                                         "min_samples": int(neutralize_min_samples)} if neutralize else None)
     result.config["preprocessing"] = processing
+    # A path is cheap and pickle-safe. Resolve optional historical sectors only
+    # when an HTML is requested; custom providers are supplied explicitly then.
+    from qlib.data import LocalProvider
+    active_provider = D._provider if provider is None or provider is D else provider
+    if type(active_provider) is LocalProvider:
+        result._report_provider_uri = str(active_provider.root)
     logger.info("因子分析完成：{} 个因子，{} 个持有期，{} 条股票日期记录",
                 len(result.factors.columns), len(result.forward_returns.columns), len(result.factors))
     return result

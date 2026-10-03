@@ -1,0 +1,198 @@
+name: Native wheels
+run-name: Native wheels ${{ github.ref_name }} @ ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/native-wheels
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-wheels-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x86_64 / MinGW-w64
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.10'
+          architecture: x64
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: Build one Python ABI independent wheel
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $env:QLIB_CC = Join-Path $env:MSYS2_LOCATION 'ucrt64/bin/gcc.exe'
+          if (!(Test-Path -LiteralPath $env:QLIB_CC)) { throw 'MinGW-w64 GCC is missing' }
+          $env:PATH = (Split-Path -Parent $env:QLIB_CC) + ';' + $env:PATH
+          python -m pip install --upgrade pip build twine
+          if ($LASTEXITCODE -ne 0) { throw 'Build dependencies failed' }
+          python -m build --wheel --outdir wheelhouse
+          if ($LASTEXITCODE -ne 0) { throw 'Native wheel build failed' }
+          $wheels = @(Get-ChildItem -LiteralPath wheelhouse -Filter '*.whl')
+          if ($wheels.Count -ne 1 -or $wheels[0].Name -notmatch '-py3-none-win_amd64\.whl$') { throw 'Unexpected wheel tag/count' }
+          python -m twine check $wheels[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Wheel metadata failed' }
+      - name: Verify installed wheel on Python 3.10 without compiler DLLs on PATH
+        shell: pwsh
+        run: |
+          $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -notmatch '(?i)(msys\d*|ucrt64|mingw64)' }) -join ';'
+          $wheel = (Get-ChildItem -LiteralPath wheelhouse -Filter '*.whl').FullName
+          python -m pip install --force-reinstall $wheel
+          if ($LASTEXITCODE -ne 0) { throw 'Wheel installation failed' }
+          python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python310.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed native validation failed' }
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.14'
+          architecture: x64
+      - name: Verify the same installed wheel on Python 3.14
+        shell: pwsh
+        run: |
+          $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -notmatch '(?i)(msys\d*|ucrt64|mingw64)' }) -join ';'
+          $wheel = (Get-ChildItem -LiteralPath wheelhouse -Filter '*.whl').FullName
+          python -m pip install --force-reinstall $wheel
+          if ($LASTEXITCODE -ne 0) { throw 'Wheel installation failed' }
+          python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python314.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installed native validation failed' }
+          $hash = Get-FileHash -LiteralPath $wheel -Algorithm SHA256
+          ($hash.Hash.ToLower() + '  ' + (Split-Path -Leaf $wheel)) | Set-Content -LiteralPath wheelhouse/SHA256SUMS -Encoding utf8
+          $env:GITHUB_SHA | Set-Content -LiteralPath wheelhouse/source-commit.txt -Encoding utf8
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: native-wheel-windows-x86_64
+          path: wheelhouse/
+          if-no-files-found: error
+          retention-days: 30
+
+  linux:
+    name: Linux ${{ matrix.arch }} / manylinux2014
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            python_arch: x64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            python_arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build, audit and repair inside manylinux
+        env:
+          WHEEL_ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          mkdir -p raw-wheels wheelhouse
+          docker run --rm --volume "$GITHUB_WORKSPACE:/io" --workdir /io \
+            --env QLIB_CC=gcc --env WHEEL_ARCH --env GITHUB_SHA \
+            "quay.io/pypa/manylinux2014_${WHEEL_ARCH}" bash -euxo pipefail -c '
+              /opt/python/cp310-cp310/bin/python -m pip install --upgrade build twine
+              /opt/python/cp310-cp310/bin/python -m build --wheel --outdir raw-wheels
+              auditwheel show raw-wheels/*.whl
+              auditwheel repair --plat "manylinux_2_17_${WHEEL_ARCH}" --wheel-dir wheelhouse raw-wheels/*.whl
+              /opt/python/cp310-cp310/bin/python -m twine check wheelhouse/*.whl
+              /opt/python/cp310-cp310/bin/python -c "import os; from pathlib import Path; from packaging.utils import parse_wheel_filename; p=list(Path(\"wheelhouse\").glob(\"*.whl\")); assert len(p)==1, p; tags=parse_wheel_filename(p[0].name)[3]; assert all(t.interpreter==\"py3\" and t.abi==\"none\" for t in tags) and any(t.platform==\"manylinux_2_17_\"+os.environ[\"WHEEL_ARCH\"] for t in tags), tags"
+            '
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.10'
+          architecture: ${{ matrix.python_arch }}
+      - name: Verify installed manylinux wheel on Python 3.10
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall wheelhouse/*.whl
+          python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python310.json
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.14'
+          architecture: ${{ matrix.python_arch }}
+      - name: Verify the same manylinux wheel on Python 3.14
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall wheelhouse/*.whl
+          python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python314.json
+          sha256sum wheelhouse/*.whl | sed 's|wheelhouse/||' > wheelhouse/SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > wheelhouse/source-commit.txt
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: native-wheel-linux-${{ matrix.arch }}
+          path: wheelhouse/
+          if-no-files-found: error
+          retention-days: 30
+
+  macos:
+    name: macOS ${{ matrix.arch }} / Clang
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            python_arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            python_arch: x64
+            runner: macos-15-intel
+    env:
+      QLIB_CC: clang
+      ARCHFLAGS: -arch ${{ matrix.arch }}
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.python_arch }}
+      - name: Build one native wheel and validate library dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip build twine delocate
+          python -m build --wheel --outdir raw-wheels
+          delocate-listdeps --all raw-wheels/*.whl
+          delocate-wheel --require-archs=${{ matrix.arch }} -w wheelhouse --verbose raw-wheels/*.whl
+          python -m twine check wheelhouse/*.whl
+          python -c "from pathlib import Path; p=list(Path('wheelhouse').glob('*.whl')); assert len(p)==1 and '-py3-none-macosx_' in p[0].name and p[0].name.endswith('_${{ matrix.arch }}.whl'), p"
+          python -m pip install --force-reinstall wheelhouse/*.whl
+          python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python311.json
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.14'
+          architecture: ${{ matrix.python_arch }}
+      - name: Verify the same wheel on Python 3.14
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall wheelhouse/*.whl
+          python -I scripts/verify_native.py --require-installed > wheelhouse/verify-python314.json
+          shasum -a 256 wheelhouse/*.whl | sed 's|wheelhouse/||' > wheelhouse/SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > wheelhouse/source-commit.txt
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: native-wheel-macos-${{ matrix.arch }}
+          path: wheelhouse/
+          if-no-files-found: error
+          retention-days: 30

@@ -50,7 +50,8 @@ provider = qlib.init(
 | 方法 | 返回值 / 用途 |
 |---|---|
 | `calendar(start_time, end_time, freq='day', future=False)` | `DatetimeIndex`；`future=True` 读取已公布的未来交易日历 |
-| `markets()`、`industries()` | 可查询的市场 / 行业名称列表 |
+| `markets()`、`industries()` | 可查询的市场名称 / 行业代码列表 |
+| `industry_names()` | 当前数据目录的行业代码到中文名称映射；优先读取根目录 industry_names.json，兼容旧 industry/names.csv；缺失名称保留代码 |
 | `instruments(market='all', filter_pipe=None)` | 股票池配置字典 |
 | `universe(instruments, start_time, end_time, freq='day', adjust=None)` | 日期 × 股票布尔表，True 为当日有效成员 |
 | `list_instruments(..., as_list=False)` | 股票到有效日期区间的字典；`as_list=True` 返回股票列表 |
@@ -65,6 +66,14 @@ provider = qlib.init(
 
 日期区间两端包含。股票代码兼容 `000001.SZ`、`SZ000001`，返回时使用前一种形式。
 `instruments` 可为市场名称、股票列表、区间字典或带过滤器的股票池配置。
+
+行业名称属于数据文件，保存在 `~/.qlib/qlib_data/cn_data/industry_names.json`，
+自定义数据源则读取其 `provider_uri` 根目录的同名文件。源码和安装包不包含行业名称映射。
+`scripts/build_data.py` 和 `scripts/rebuild_industry.py` 从分类数据生成该文件，
+不同数据源的名称互不影响。JSON 使用 `schema_version: 1` 和 `names` 代码名称字典；
+它只控制显示名称，历史行业归属仍由 `industry/*.txt` 确定。
+JSON 存在时优先使用；旧数据目录没有 JSON 时兼容读取 `industry/names.csv`。
+没有名称目录或个别代码没有名称时保留原代码，损坏的名称目录会报错。
 
 ```python
 pool = D.instruments("csi300")
@@ -92,6 +101,8 @@ cn_data/
 ├─ instruments/csi300.txt
 ├─ instruments/st.txt
 ├─ industry/801780.SI.txt
+├─ industry_names.json
+├─ industry/names.csv
 ├─ features/000001.SZ/close.day.bin
 ├─ features/000001.SZ/factor.day.bin
 ├─ features/000001.SZ/up_limit.day.bin
@@ -135,6 +146,20 @@ limits = D.daily(["000001.SZ"], ["up_limit", "down_limit"],
 重跑可补全中断的发布。返回股票数、日线记录数和双侧边界覆盖数，完成后调用 `D.clear_cache()`。
 
 ## 下载与构建
+
+历史行业使用闭区间，源 `out_date` 当天仍属于原行业；交易日历对齐后，同一股票的
+不同一级行业不能重叠，真实长期空档保留。构建器在写文件前检查全部行业区间。
+行业代码和中文名称另外保存为数据根目录的 `industry_names.json`，
+构建器同时保留 `industry/names.csv` 供旧版读取，不使用当前股票快照倒填历史分类。
+
+已有行情与财务数据无需因行业边界修正而全量重建。可使用缓存准备行业文件：
+
+```powershell
+.venv\Scripts\python.exe scripts/rebuild_industry.py --output-root outputs/industry_stage
+```
+
+此脚本只读默认数据目录和 CSV 缓存，只向指定的空目录写入行业文件、根目录名称 JSON 及校验记录；
+检查后再替换数据目录中的对应行业文件和名称 JSON，使用中的提供器需调用 `clear_cache()`。
 
 配置位于 `scripts/config.py`：
 

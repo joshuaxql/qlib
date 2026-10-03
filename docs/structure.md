@@ -11,7 +11,7 @@ qlib/
 │  ├─ ops.py                          # 数值算子
 │  ├─ filter.py                       # 历史过滤器
 │  ├─ pit.py                          # 合并财务数据
-│  └─ _libs/                          # C 源码、头文件、ctypes、DLL
+│  └─ _libs/                          # C 源码、头文件、ctypes、平台原生库
 ├─ backtest/
 │  ├─ backtest.py                     # 回测入口
 │  ├─ executor.py                     # 执行逻辑
